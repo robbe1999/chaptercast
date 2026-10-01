@@ -1,0 +1,35 @@
+# Secrets: never commit these. Only .env.example (placeholders) is tracked.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/coverage/
+
+# Runtime output
+data/
+*.mp3
+*.wav
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
