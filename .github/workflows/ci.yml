@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: CI only needs to read the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Install ffmpeg (exercises the lossless MP3 stitching path)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy
+      - run: pytest
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Built bundle must not contain provider credentials or endpoints
+        run: "! grep -rIlE 'xi-api-key|ELEVENLABS|sk_[A-Za-z0-9]{16,}|api\\.elevenlabs\\.io' dist"
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t chaptercast:ci .
+      - name: Smoke test (demo mode, no secrets)
+        run: |
+          docker run -d --name cc -p 8000:8000 --read-only \
+            --tmpfs /data:uid=10001,gid=10001,mode=0700 --tmpfs /tmp \
+            --cap-drop ALL --security-opt no-new-privileges:true chaptercast:ci
+          for i in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8000/healthz && break || sleep 1
+          done
+          curl -fsS http://127.0.0.1:8000/api/config
+          curl -fsS http://127.0.0.1:8000/ | grep -q "<title>ChapterCast</title>"
+          docker logs cc
+          docker rm -f cc
