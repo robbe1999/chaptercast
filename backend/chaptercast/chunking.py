@@ -25,7 +25,7 @@ _ABBREVIATIONS = frozenset(
 # One sentence = lazily up to terminal punctuation (plus closing quotes/brackets)
 # that is followed by whitespace or end of text.
 _SENTENCE_RE = re.compile(r".+?(?:[.!?…]+[\"'”’)\]]*(?=\s|$)|$)", re.DOTALL)
-_CLAUSE_RE = re.compile(r".+?(?:[,;:–—](?=\s)|$)", re.DOTALL)  # also en/em dash
+_CLAUSE_RE = re.compile(r".+?(?:[,;:\u2013\u2014](?=\s)|$)", re.DOTALL)  # also en/em dash
 _PARAGRAPH_SPLIT_RE = re.compile(r"\n\s*\n")
 _WHITESPACE_RE = re.compile(r"\s+")
 
