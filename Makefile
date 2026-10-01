@@ -8,7 +8,8 @@ setup:  ## Install backend and frontend dependencies
 	cd frontend && npm ci
 
 dev-api:  ## Run the API with auto-reload (demo mode unless a key is in .env)
-	cd backend && . .venv/bin/activate && uvicorn chaptercast.main:create_app --factory --reload --port 8000
+	# Run from the repo root so the root .env is picked up (settings read ./.env).
+	. backend/.venv/bin/activate && uvicorn chaptercast.main:create_app --factory --reload --reload-dir backend/chaptercast --port 8000
 
 dev-web:  ## Run the frontend dev server (proxies /api to :8000)
 	cd frontend && npm run dev
