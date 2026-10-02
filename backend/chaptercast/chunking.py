@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from dataclasses import dataclass
 
 _ABBREVIATIONS = frozenset(
     {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "e.g", "i.e", "fig", "inc", "ltd"}
@@ -110,7 +111,15 @@ def _fit(unit: str, max_chars: int, *, try_clauses: bool = True) -> list[str]:
     return _pack(words, max_chars)
 
 
-def split_text(text: str, max_chars: int = 900) -> list[str]:
+@dataclass(frozen=True)
+class Chunk:
+    text: str
+    # True when the chunk begins a new paragraph. Paragraph breaks *inside* a chunk
+    # stay visible as "\n\n"; this flag preserves the ones that fall on a boundary.
+    starts_paragraph: bool
+
+
+def split_chunks(text: str, max_chars: int = 900) -> list[Chunk]:
     """Split ``text`` into narration chunks of at most ``max_chars`` characters."""
     if max_chars < 20:
         raise ValueError("max_chars must be at least 20")
@@ -118,8 +127,9 @@ def split_text(text: str, max_chars: int = 900) -> list[str]:
     if not normalized:
         return []
 
-    chunks: list[str] = []
+    chunks: list[Chunk] = []
     current = ""
+    current_starts_paragraph = True
     for paragraph in normalized.split("\n\n"):
         first_in_paragraph = True
         for sentence in _sentences(paragraph):
@@ -129,9 +139,15 @@ def split_text(text: str, max_chars: int = 900) -> list[str]:
                 if len(candidate) <= max_chars:
                     current = candidate
                 else:
-                    chunks.append(current)
+                    chunks.append(Chunk(current, current_starts_paragraph))
                     current = piece
+                    current_starts_paragraph = first_in_paragraph
                 first_in_paragraph = False
     if current:
-        chunks.append(current)
+        chunks.append(Chunk(current, current_starts_paragraph))
     return chunks
+
+
+def split_text(text: str, max_chars: int = 900) -> list[str]:
+    """Like :func:`split_chunks`, returning only the chunk texts."""
+    return [chunk.text for chunk in split_chunks(text, max_chars)]
