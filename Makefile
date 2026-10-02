@@ -1,10 +1,15 @@
 .PHONY: help setup dev-api dev-web test test-api test-web lint typecheck scan openapi build docker check
 
+# The backend needs Python >= 3.11. macOS ships 3.9 as `python3`, so prefer an
+# explicit newer interpreter. Override with `make setup PYTHON=/path/to/python`.
+PYTHON ?= $(shell command -v python3.13 || command -v python3.12 || command -v python3.11 || echo python3)
+
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 setup:  ## Install backend and frontend dependencies
-	cd backend && python3 -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
+	@$(PYTHON) -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else "Python >= 3.11 is required (found " + sys.version.split()[0] + "). Install it, e.g. brew install python@3.11")'
+	cd backend && rm -rf .venv && $(PYTHON) -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
 	cd frontend && npm ci
 
 dev-api:  ## Run the API with auto-reload (demo mode unless a key is in .env)

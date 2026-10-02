@@ -2,6 +2,9 @@
 .env
 .env.*
 !.env.example
+
+# Private notes (interview prep etc.): never committed, never in the image.
+*.private.md
 *.pem
 *.key
 secrets/

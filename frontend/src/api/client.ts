@@ -2,10 +2,17 @@ import type { z } from "zod";
 import {
   ConfigSchema,
   ErrorEnvelopeSchema,
+  EstimateSchema,
   JobSchema,
+  ModelsSchema,
+  TranscriptSchema,
   VoicesSchema,
   type Config,
+  type Estimate,
   type Job,
+  type JobInput,
+  type Models,
+  type Transcript,
   type Voices,
 } from "./schemas";
 
@@ -24,10 +31,15 @@ export class ApiError extends Error {
 export interface Api {
   getConfig(signal?: AbortSignal): Promise<Config>;
   listVoices(signal?: AbortSignal): Promise<Voices>;
-  createJob(input: { text: string; voiceId: string }, signal?: AbortSignal): Promise<Job>;
+  listModels(signal?: AbortSignal): Promise<Models>;
+  estimate(input: JobInput, signal?: AbortSignal): Promise<Estimate>;
+  createJob(input: JobInput, signal?: AbortSignal): Promise<Job>;
   getJob(id: string, signal?: AbortSignal): Promise<Job>;
   cancelJob(id: string): Promise<void>;
   fetchAudio(id: string, signal?: AbortSignal): Promise<Blob>;
+  getTranscript(id: string, signal?: AbortSignal): Promise<Transcript>;
+  fetchCaptions(id: string, format: "srt" | "vtt"): Promise<Blob>;
+  fetchPreview(voiceId: string, signal?: AbortSignal): Promise<Blob>;
   hasToken(): boolean;
   setToken(token: string | null): void;
 }
@@ -107,28 +119,40 @@ export function createApi({ fetchImpl, tokenStore }: ApiOptions = {}): Api {
     return parsed.data;
   }
 
+  const blob = async (path: string, signal?: AbortSignal) => (await send(path, { signal })).blob();
+  const jobPath = (id: string) => `/api/jobs/${encodeURIComponent(id)}`;
+
   return {
     getConfig: (signal) => json(ConfigSchema, "/api/config", { signal }),
     listVoices: (signal) => json(VoicesSchema, "/api/voices", { signal }),
-    createJob: ({ text, voiceId }, signal) =>
-      json(JobSchema, "/api/jobs", {
-        method: "POST",
-        body: JSON.stringify({ text, voice_id: voiceId }),
-        signal,
-      }),
-    getJob: (id, signal) => json(JobSchema, `/api/jobs/${encodeURIComponent(id)}`, { signal }),
+    listModels: (signal) => json(ModelsSchema, "/api/models", { signal }),
+    estimate: (input, signal) =>
+      json(EstimateSchema, "/api/estimate", { method: "POST", body: jobBody(input), signal }),
+    createJob: (input, signal) =>
+      json(JobSchema, "/api/jobs", { method: "POST", body: jobBody(input), signal }),
+    getJob: (id, signal) => json(JobSchema, jobPath(id), { signal }),
     cancelJob: async (id) => {
       await send(`/api/jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
     },
-    fetchAudio: async (id, signal) => {
-      // Fetched with the Authorization header and played from a blob: URL, because
-      // <audio src> cannot send headers and tokens must never go in query strings.
-      const response = await send(`/api/jobs/${encodeURIComponent(id)}/audio`, { signal });
-      return response.blob();
-    },
+    // Media is fetched with the Authorization header and played from a blob: URL,
+    // because <audio src> cannot send headers and tokens must never go in query strings.
+    fetchAudio: (id, signal) => blob(`${jobPath(id)}/audio`, signal),
+    getTranscript: (id, signal) => json(TranscriptSchema, `${jobPath(id)}/transcript`, { signal }),
+    fetchCaptions: (id, format) => blob(`${jobPath(id)}/captions.${format}`),
+    fetchPreview: (voiceId, signal) =>
+      blob(`/api/voices/${encodeURIComponent(voiceId)}/preview`, signal),
     hasToken: () => store.get() !== null,
     setToken: (token) => store.set(token),
   };
+}
+
+function jobBody({ text, voiceId, modelId, voiceSettings }: JobInput): string {
+  return JSON.stringify({
+    text,
+    voice_id: voiceId,
+    ...(modelId ? { model_id: modelId } : {}),
+    ...(voiceSettings && Object.keys(voiceSettings).length ? { voice_settings: voiceSettings } : {}),
+  });
 }
 
 async function toApiError(response: Response): Promise<ApiError> {

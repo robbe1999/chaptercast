@@ -8,7 +8,7 @@ import pytest
 
 from chaptercast.audio import WAV, stitch
 from chaptercast.providers import build_provider
-from chaptercast.providers.base import ProviderRejectedError
+from chaptercast.providers.base import ProviderRejectedError, VoiceSettings
 from chaptercast.providers.demo import DemoProvider
 from chaptercast.providers.elevenlabs import ElevenLabsProvider
 from tests.conftest import SENTINEL_KEY, make_settings
@@ -80,3 +80,45 @@ async def test_demo_can_be_forced_even_when_a_key_is_present(tmp_path: Path) -> 
         make_settings(tmp_path, provider="demo", elevenlabs_api_key=SENTINEL_KEY)
     )
     assert isinstance(provider, DemoProvider)
+
+
+def duration(data: bytes) -> float:
+    with wave.open(io.BytesIO(data), "rb") as wav:
+        return wav.getnframes() / wav.getframerate()
+
+
+async def test_demo_alignment_is_exact_and_matches_the_text() -> None:
+    text = "One two,  three.\n\nFour"
+    clip = await DemoProvider(latency_seconds=0).synthesize(text, "demo-aria")
+    assert clip.alignment is not None
+    assert "".join(clip.alignment.characters) == text
+    assert list(clip.alignment.starts) == sorted(clip.alignment.starts)
+    assert clip.alignment.ends[-1] == pytest.approx(duration(clip.data), abs=1e-3)
+
+
+async def test_demo_speed_setting_changes_the_tempo() -> None:
+    provider = DemoProvider(latency_seconds=0)
+    normal = await provider.synthesize("Some words to say.", "demo-aria")
+    fast = await provider.synthesize(
+        "Some words to say.", "demo-aria", voice_settings=VoiceSettings(speed=1.2)
+    )
+    assert duration(fast.data) < duration(normal.data)
+
+
+async def test_demo_models_and_previews() -> None:
+    provider = DemoProvider(latency_seconds=0)
+    models = await provider.list_models()
+    assert {m.model_id: m.cost_multiplier for m in models} == {
+        "demo_standard": 1.0,
+        "demo_fast": 0.5,
+    }
+    preview = await provider.voice_preview("demo-lyra")
+    assert preview is not None and preview.data[:4] == b"RIFF"
+    assert preview.content_type == "audio/wav"
+    assert await provider.voice_preview("nobody") is None
+    assert all(v.has_preview for v in await provider.list_voices())
+
+
+async def test_demo_rejects_unknown_models() -> None:
+    with pytest.raises(ProviderRejectedError):
+        await DemoProvider(latency_seconds=0).synthesize("Hi.", "demo-aria", model_id="nope")

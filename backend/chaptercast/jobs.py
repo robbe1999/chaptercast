@@ -7,8 +7,13 @@ Design notes
   jobs (providers enforce per-plan concurrency limits).
 * Chunks run concurrently inside a ``TaskGroup``: the first failure cancels the
   siblings, so a doomed job stops spending credits immediately.
-* Characters are reserved against the daily budget at submit time and refunded
-  for chunks that did not complete when a job fails or is cancelled.
+* Every chunk is looked up in a content-addressed cache first (see cache.py).
+  Only chunks that miss are reserved against the daily budget and sent to the
+  provider, so re-generating an edited chapter pays only for what changed.
+* Characters are reserved against the daily budget at submit time and anything
+  not actually billed (failures, cancellations, late cache hits) is refunded.
+* When every clip carries character timings, they are merged into chapter-level
+  word timings for the read-along transcript and caption exports.
 * State is in memory. That is a conscious trade-off for a single-instance demo;
   docs/ARCHITECTURE.md describes the path to a queue plus object storage.
 """
@@ -27,7 +32,8 @@ from enum import StrEnum
 from pathlib import Path
 
 from chaptercast.audio import AudioFormat, estimate_duration_seconds, stitch
-from chaptercast.chunking import split_text
+from chaptercast.cache import ClipCache, ClipRequest
+from chaptercast.chunking import Chunk, split_chunks
 from chaptercast.config import Settings
 from chaptercast.errors import (
     BudgetExceededError,
@@ -36,8 +42,9 @@ from chaptercast.errors import (
     TextTooLongError,
 )
 from chaptercast.guards import DailyBudget
-from chaptercast.providers.base import AudioClip, ProviderError, TTSProvider
+from chaptercast.providers.base import AudioClip, ProviderError, TTSProvider, VoiceSettings
 from chaptercast.storage import AudioStore
+from chaptercast.transcript import Segment, Word, build_words
 
 log = logging.getLogger(__name__)
 
@@ -55,21 +62,54 @@ class JobStatus(StrEnum):
 TERMINAL = frozenset({JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED})
 
 
+@dataclass(frozen=True)
+class JobRequest:
+    text: str
+    voice_id: str
+    model_id: str
+    voice_settings: VoiceSettings = field(default_factory=VoiceSettings)
+
+
+@dataclass(frozen=True)
+class Plan:
+    """How a request would be executed: its chunks, their cache keys and which are cached."""
+
+    chunks: list[Chunk]
+    requests: list[ClipRequest]
+    cached: list[bool]
+
+    @property
+    def char_count(self) -> int:
+        return sum(len(c.text) for c in self.chunks)
+
+    @property
+    def cached_chunks(self) -> int:
+        return sum(self.cached)
+
+    @property
+    def billable_chars(self) -> int:
+        return sum(len(c.text) for c, hit in zip(self.chunks, self.cached, strict=True) if not hit)
+
+
 @dataclass
 class Job:
     id: str
     voice_id: str
+    model_id: str
     char_count: int
     total_chunks: int
     created_at: datetime
     status: JobStatus = JobStatus.QUEUED
     completed_chunks: int = 0
-    spent_chars: int = 0
+    cached_chunks: int = 0
+    reserved_chars: int = 0
+    billed_chars: int = 0
     error_code: str | None = None
     error_message: str | None = None
     audio_path: Path | None = None
     audio_format: AudioFormat | None = None
     duration_seconds: float | None = None
+    words: list[Word] | None = field(default=None, repr=False)
     finished_at: float | None = None
     task: asyncio.Task[None] | None = field(default=None, repr=False)
 
@@ -89,9 +129,11 @@ class JobManager:
         store: AudioStore,
         budget: DailyBudget,
         settings: Settings,
+        cache: ClipCache | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._provider = provider
+        self._cache = cache
         self._store = store
         self._budget = budget
         self._settings = settings
@@ -107,31 +149,61 @@ class JobManager:
     def active_count(self) -> int:
         return sum(1 for j in self._jobs.values() if j.status not in TERMINAL)
 
+    def plan(self, request: JobRequest) -> Plan:
+        """Chunk the text and check the cache. Pure lookup: no spend, no provider call."""
+        chunks = split_chunks(request.text, self._settings.chunk_max_chars)
+        fmt = self._provider.output_format
+        format_name = f"{fmt.extension}_{fmt.bitrate_kbps or 0}"
+        requests = [
+            ClipRequest(
+                provider=self._provider.name,
+                output_format=format_name,
+                model_id=request.model_id,
+                voice_id=request.voice_id,
+                voice_settings=request.voice_settings,
+                text=chunk.text,
+                previous_text=chunks[i - 1].text[-_CONTEXT_CHARS:] if i > 0 else None,
+                next_text=chunks[i + 1].text[:_CONTEXT_CHARS] if i + 1 < len(chunks) else None,
+            )
+            for i, chunk in enumerate(chunks)
+        ]
+        cache = self._cache
+        cached = [cache is not None and cache.contains(r.key()) for r in requests]
+        return Plan(chunks, requests, cached)
+
     # ----------------------------------------------------------------- commands
-    async def submit(self, text: str, voice_id: str) -> Job:
-        chunks = split_text(text, self._settings.chunk_max_chars)
-        if not chunks:
+    async def submit(self, request: JobRequest) -> Job:
+        plan = await asyncio.to_thread(self.plan, request)
+        if not plan.chunks:
             raise EmptyTextError("No speakable text")
-        char_count = sum(len(c) for c in chunks)
-        if char_count > self._settings.max_chars_per_job:
-            raise TextTooLongError(self._settings.max_chars_per_job, char_count)
+        if plan.char_count > self._settings.max_chars_per_job:
+            raise TextTooLongError(self._settings.max_chars_per_job, plan.char_count)
         if self.active_count() >= self._settings.max_active_jobs:
             raise CapacityError
         self._evict_oldest_finished_if_full()
-        if not self._budget.reserve(char_count):
+        if not self._budget.reserve(plan.billable_chars):
             raise BudgetExceededError(self._budget.remaining)
 
         job = Job(
             id=uuid.uuid4().hex,
-            voice_id=voice_id,
-            char_count=char_count,
-            total_chunks=len(chunks),
+            voice_id=request.voice_id,
+            model_id=request.model_id,
+            char_count=plan.char_count,
+            total_chunks=len(plan.chunks),
             created_at=datetime.now(UTC),
+            reserved_chars=plan.billable_chars,
         )
         self._jobs[job.id] = job
-        job.task = asyncio.create_task(self._run(job, chunks), name=f"job-{job.id}")
+        job.task = asyncio.create_task(self._run(job, request, plan), name=f"job-{job.id}")
         log.info(
-            "job submitted", extra={"job_id": job.id, "chunks": len(chunks), "chars": char_count}
+            "job submitted",
+            extra={
+                "job_id": job.id,
+                "chunks": len(plan.chunks),
+                "chars": plan.char_count,
+                "cached_chunks": plan.cached_chunks,
+                "model_id": request.model_id,
+            },
         )
         return job
 
@@ -187,7 +259,11 @@ class JobManager:
         job.finished_at = self._clock()
 
     def _fail(self, job: Job, exc: BaseException) -> None:
-        if isinstance(exc, ProviderError):
+        if isinstance(exc, BudgetExceededError):
+            job.error_code = "daily_budget_exceeded"
+            job.error_message = "The daily character budget ran out during this job."
+            log.warning("job failed", extra={"job_id": job.id, "code": job.error_code})
+        elif isinstance(exc, ProviderError):
             job.error_code, job.error_message = exc.code, exc.public_message
             log.warning(
                 "job failed",
@@ -200,26 +276,53 @@ class JobManager:
         self._finish(job, JobStatus.FAILED)
 
     async def _synth(
-        self, job: Job, chunks: list[str], i: int, out: list[AudioClip | None]
+        self, job: Job, request: JobRequest, plan: Plan, i: int, out: list[AudioClip | None]
     ) -> None:
-        previous = chunks[i - 1][-_CONTEXT_CHARS:] if i > 0 else None
-        following = chunks[i + 1][:_CONTEXT_CHARS] if i + 1 < len(chunks) else None
-        async with self._tts_slots:
-            clip = await self._provider.synthesize(
-                chunks[i], job.voice_id, previous_text=previous, next_text=following
-            )
+        clip_request = plan.requests[i]
+        key = clip_request.key()
+        cache = self._cache
+        clip = await asyncio.to_thread(cache.get, key) if cache is not None else None
+        if clip is not None:
+            job.cached_chunks += 1
+        else:
+            chars = len(clip_request.text)
+            if plan.cached[i]:
+                # Predicted hit that expired or was evicted since submit: pay for it now.
+                if not self._budget.reserve(chars):
+                    raise BudgetExceededError(self._budget.remaining)
+                job.reserved_chars += chars
+            async with self._tts_slots:
+                clip = await self._provider.synthesize(
+                    clip_request.text,
+                    request.voice_id,
+                    model_id=request.model_id,
+                    voice_settings=request.voice_settings,
+                    previous_text=clip_request.previous_text,
+                    next_text=clip_request.next_text,
+                )
+            job.billed_chars += chars
+            if cache is not None:
+                await asyncio.to_thread(cache.put, key, clip)
         out[i] = clip
         job.completed_chunks += 1
-        job.spent_chars += len(chunks[i])
 
-    async def _run(self, job: Job, chunks: list[str]) -> None:
-        results: list[AudioClip | None] = [None] * len(chunks)
+    def _transcript(self, plan: Plan, clips: list[AudioClip]) -> list[Word] | None:
+        segments = []
+        for chunk, clip in zip(plan.chunks, clips, strict=True):
+            duration = estimate_duration_seconds(clip.data, clip.fmt)
+            if clip.alignment is None or duration is None:
+                return None
+            segments.append(Segment(clip.alignment, duration, chunk.starts_paragraph))
+        return build_words(segments)
+
+    async def _run(self, job: Job, request: JobRequest, plan: Plan) -> None:
+        results: list[AudioClip | None] = [None] * len(plan.chunks)
         try:
             async with self._job_slots:
                 job.status = JobStatus.RUNNING
                 async with asyncio.TaskGroup() as group:
-                    for i in range(len(chunks)):
-                        group.create_task(self._synth(job, chunks, i, results))
+                    for i in range(len(plan.chunks)):
+                        group.create_task(self._synth(job, request, plan, i, results))
                 clips = [c for c in results if c is not None]
                 fmt = self._provider.output_format
                 data = await stitch([c.data for c in clips], fmt)
@@ -228,8 +331,16 @@ class JobManager:
                 )
                 job.audio_format = fmt
                 job.duration_seconds = estimate_duration_seconds(data, fmt)
+                job.words = self._transcript(plan, clips)
                 self._finish(job, JobStatus.SUCCEEDED)
-                log.info("job succeeded", extra={"job_id": job.id})
+                log.info(
+                    "job succeeded",
+                    extra={
+                        "job_id": job.id,
+                        "cached_chunks": job.cached_chunks,
+                        "billed_chars": job.billed_chars,
+                    },
+                )
         except asyncio.CancelledError:
             self._finish(job, JobStatus.CANCELLED)
             raise
@@ -238,5 +349,4 @@ class JobManager:
         except Exception as exc:
             self._fail(job, exc)
         finally:
-            if job.status is not JobStatus.SUCCEEDED:
-                self._budget.refund(job.char_count - job.spent_chars)
+            self._budget.refund(job.reserved_chars - job.billed_chars)

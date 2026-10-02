@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from fastapi import Request
 
+from chaptercast.cache import ClipCache
 from chaptercast.config import Settings
 from chaptercast.errors import ApiError
 from chaptercast.guards import DailyBudget, SlidingWindowLimiter
@@ -21,9 +22,11 @@ class Container:
     provider: TTSProvider
     store: AudioStore
     budget: DailyBudget
+    cache: ClipCache
     jobs: JobManager
     job_limiter: SlidingWindowLimiter
     auth_fail_limiter: SlidingWindowLimiter
+    read_limiter: SlidingWindowLimiter
 
 
 def get_container(request: Request) -> Container:

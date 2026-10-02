@@ -5,11 +5,16 @@ const JOB = {
   id: "a".repeat(32),
   status: "queued",
   voice_id: "v1",
+  model_id: "m1",
   char_count: 10,
   progress: { completed_chunks: 0, total_chunks: 1 },
+  cached_chunks: 0,
+  billed_characters: 0,
   created_at: "2026-10-01T10:00:00Z",
   duration_seconds: null,
   audio_url: null,
+  transcript_url: null,
+  captions: null,
   error: null,
 };
 
@@ -123,5 +128,41 @@ describe("createApi", () => {
     expect(api.hasToken()).toBe(true);
     api.setToken(null);
     expect(api.hasToken()).toBe(false);
+  });
+
+  it("sends model and voice settings only when given", async () => {
+    const fetchImpl = vi.fn(async () => reply(JOB, { status: 202 }));
+    const api = createApi({ fetchImpl, tokenStore: memoryStore() });
+    await api.createJob({ text: "Hi.", voiceId: "v1", modelId: "m2", voiceSettings: { speed: 1.1 } });
+    await api.createJob({ text: "Hi.", voiceId: "v1", voiceSettings: {} });
+    const bodies = fetchImpl.mock.calls.map((call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string));
+    expect(bodies[0]).toEqual({ text: "Hi.", voice_id: "v1", model_id: "m2", voice_settings: { speed: 1.1 } });
+    expect(bodies[1]).toEqual({ text: "Hi.", voice_id: "v1" });
+  });
+
+  it("posts estimates and validates the response", async () => {
+    const estimate = {
+      characters: 3, chunks: 1, cached_chunks: 0, billable_characters: 3, cost_multiplier: 1,
+      estimated_credits: 3, max_chars_per_job: 10, within_limit: true, daily_budget_remaining: 9,
+    };
+    const fetchImpl = vi.fn(async () => reply(estimate));
+    const result = await createApi({ fetchImpl, tokenStore: memoryStore() }).estimate({ text: "Hi.", voiceId: "v1" });
+    expect((fetchImpl.mock.calls[0] as unknown as [string])[0]).toBe("/api/estimate");
+    expect(result).toEqual(estimate);
+  });
+
+  it("fetches previews, transcripts and captions from encoded paths", async () => {
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.endsWith("/transcript") ? reply({ duration_seconds: 1, words: [] }) : new Response("bytes"),
+    );
+    const api = createApi({ fetchImpl: fetchImpl as unknown as typeof fetch, tokenStore: memoryStore() });
+    await api.fetchPreview("a/b");
+    await api.getTranscript("x?y");
+    await api.fetchCaptions("x?y", "vtt");
+    expect(fetchImpl.mock.calls.map((call) => call[0])).toEqual([
+      "/api/voices/a%2Fb/preview",
+      "/api/jobs/x%3Fy/transcript",
+      "/api/jobs/x%3Fy/captions.vtt",
+    ]);
   });
 });
