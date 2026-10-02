@@ -15,7 +15,7 @@ describe("useJob", () => {
     ]);
     const { result } = renderHook(() => useJob(api, FAST));
 
-    act(() => void result.current.start("Hello.", "v1"));
+    act(() => void result.current.start({ text: "Hello.", voiceId: "v1" }));
     expect(result.current.state.phase).toBe("submitting");
 
     await waitFor(() => expect(result.current.state.phase).toBe("done"));
@@ -33,7 +33,7 @@ describe("useJob", () => {
       makeJob({ status: "failed", error: { code: "provider_quota", message: "Quota exhausted." } }),
     ]);
     const { result } = renderHook(() => useJob(api, FAST));
-    act(() => void result.current.start("Hello.", "v1"));
+    act(() => void result.current.start({ text: "Hello.", voiceId: "v1" }));
 
     await waitFor(() => expect(result.current.state.phase).toBe("failed"));
     expect(result.current.state).toMatchObject({ code: "provider_quota", message: "Quota exhausted." });
@@ -46,7 +46,7 @@ describe("useJob", () => {
       }),
     });
     const { result } = renderHook(() => useJob(api, FAST));
-    act(() => void result.current.start("Hello.", "v1"));
+    act(() => void result.current.start({ text: "Hello.", voiceId: "v1" }));
     await waitFor(() => expect(result.current.state.phase).toBe("failed"));
     expect(result.current.state).toMatchObject({ code: "rate_limited" });
   });
@@ -59,7 +59,7 @@ describe("useJob", () => {
       .mockResolvedValue(SUCCEEDED());
     const api = makeApi([makeJob({ status: "running" })], { getJob });
     const { result } = renderHook(() => useJob(api, FAST));
-    act(() => void result.current.start("Hello.", "v1"));
+    act(() => void result.current.start({ text: "Hello.", voiceId: "v1" }));
     await waitFor(() => expect(result.current.state.phase).toBe("done"));
     expect(getJob).toHaveBeenCalledTimes(3);
   });
@@ -68,7 +68,7 @@ describe("useJob", () => {
     const getJob = vi.fn().mockRejectedValue(new ApiError(503, "busy", "still busy"));
     const api = makeApi([makeJob({ status: "running" })], { getJob });
     const { result } = renderHook(() => useJob(api, FAST));
-    act(() => void result.current.start("Hello.", "v1"));
+    act(() => void result.current.start({ text: "Hello.", voiceId: "v1" }));
     await waitFor(() => expect(result.current.state.phase).toBe("failed"), { timeout: 3000 });
     expect(getJob).toHaveBeenCalledTimes(5);
   });
@@ -77,7 +77,7 @@ describe("useJob", () => {
     const getJob = vi.fn().mockRejectedValue(new ApiError(404, "not_found", "Job not found."));
     const api = makeApi([makeJob({ status: "running" })], { getJob });
     const { result } = renderHook(() => useJob(api, FAST));
-    act(() => void result.current.start("Hello.", "v1"));
+    act(() => void result.current.start({ text: "Hello.", voiceId: "v1" }));
     await waitFor(() => expect(result.current.state.phase).toBe("failed"));
     expect(getJob).toHaveBeenCalledTimes(1);
   });
@@ -87,7 +87,7 @@ describe("useJob", () => {
       getJob: vi.fn(async () => makeJob({ status: "running" })),
     });
     const { result } = renderHook(() => useJob(api, FAST));
-    act(() => void result.current.start("Hello.", "v1"));
+    act(() => void result.current.start({ text: "Hello.", voiceId: "v1" }));
     await waitFor(() => expect(result.current.state.phase).toBe("running"));
 
     act(() => result.current.cancel());
@@ -102,7 +102,7 @@ describe("useJob", () => {
   it("reset revokes the blob URL and deletes the audio server-side", async () => {
     const api = makeApi([SUCCEEDED()]);
     const { result } = renderHook(() => useJob(api, FAST));
-    act(() => void result.current.start("Hello.", "v1"));
+    act(() => void result.current.start({ text: "Hello.", voiceId: "v1" }));
     await waitFor(() => expect(result.current.state.phase).toBe("done"));
     const url = (result.current.state as { audioUrl: string }).audioUrl;
 
@@ -115,7 +115,7 @@ describe("useJob", () => {
   it("unmounting revokes the blob URL and stops polling", async () => {
     const api = makeApi([SUCCEEDED()]);
     const { result, unmount } = renderHook(() => useJob(api, FAST));
-    act(() => void result.current.start("Hello.", "v1"));
+    act(() => void result.current.start({ text: "Hello.", voiceId: "v1" }));
     await waitFor(() => expect(result.current.state.phase).toBe("done"));
     const url = (result.current.state as { audioUrl: string }).audioUrl;
     unmount();
@@ -127,7 +127,7 @@ describe("useJob", () => {
       fetchAudio: vi.fn(async () => new Blob(["x"], { type: "audio/mpeg" })),
     });
     const { result } = renderHook(() => useJob(api, FAST));
-    act(() => void result.current.start("Hello.", "v1"));
+    act(() => void result.current.start({ text: "Hello.", voiceId: "v1" }));
     await waitFor(() => expect(result.current.state.phase).toBe("done"));
     expect(result.current.state).toMatchObject({ extension: "mp3" });
   });
