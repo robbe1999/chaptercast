@@ -30,6 +30,11 @@ describe("markdownToNarration", () => {
     expect(markdownToNarration(source)).toBe("Before.\n\nInside\nAfter.");
   });
 
+  it("leaves no tag or comment behind when they are nested to dodge a single pass", () => {
+    expect(markdownToNarration("a <<b>script>alert(1)<</b>/script> b")).toBe("a alert(1) b");
+    expect(markdownToNarration("x <!<!-- -->-- hidden --> y")).toBe("x  y");
+  });
+
   it("removes list, quote and rule markup", () => {
     expect(markdownToNarration("- one\n* two\n1. three\n> quoted\n\n***\n\nEnd.")).toBe(
       "one\ntwo\nthree\nquoted\n\nEnd.",

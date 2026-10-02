@@ -14,7 +14,7 @@ export function markdownToNarration(source: string): string {
 
   text = text.replace(/^---\n[\s\S]*?\n---\n/, ""); // YAML front matter
   text = text.replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, ""); // fenced code
-  text = text.replace(/<!--[\s\S]*?-->/g, ""); // HTML comments
+  text = removeAll(text, /<!--[\s\S]*?-->/g); // HTML comments
   text = text.replace(/^\s{0,3}\[[^\]]+\]:\s*\S+.*$/gm, ""); // reference link definitions
   // Setext headings before rules: "Title\n---" is a heading, a lone "---" is a rule.
   text = text.replace(/^([^\n]*\S[^\n]*)\n(=+|-+)[ \t]*$/gm, (_, h: string) => asHeading(h));
@@ -26,7 +26,7 @@ export function markdownToNarration(source: string): string {
   text = text.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1"); // inline links keep their text
   text = text.replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1"); // reference links
   text = text.replace(/<https?:\/\/[^>]+>/g, ""); // autolinks
-  text = text.replace(/<\/?[a-zA-Z][^>]*>/g, ""); // inline HTML tags
+  text = removeAll(text, /<\/?[a-zA-Z][^>]*>/g); // inline HTML tags
 
   text = text.replace(/^\s{0,3}>\s?/gm, ""); // blockquotes
   text = text.replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, ""); // list markers
@@ -44,6 +44,20 @@ export function markdownToNarration(source: string): string {
     .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/**
+ * Remove every match, repeating until nothing changes. One pass is not enough:
+ * removing "<b>" from "<<b>script>" leaves "<script>". (The result only ever
+ * becomes a textarea value and TTS input, never HTML, but it should still be clean.)
+ */
+function removeAll(text: string, pattern: RegExp): string {
+  let previous: string;
+  do {
+    previous = text;
+    text = text.replace(pattern, "");
+  } while (text !== previous);
+  return text;
 }
 
 /** A heading becomes its own sentence, so the narrator pauses after it. */
