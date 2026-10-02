@@ -22,6 +22,7 @@ from starlette.types import Scope
 
 from chaptercast import __version__
 from chaptercast.api import router
+from chaptercast.cache import ClipCache
 from chaptercast.config import Settings, get_settings
 from chaptercast.deps import Container
 from chaptercast.errors import ApiError
@@ -40,6 +41,7 @@ from chaptercast.storage import AudioStore
 log = logging.getLogger(__name__)
 
 _CLEANUP_INTERVAL_SECONDS = 30
+_READS_PER_MINUTE = 120
 
 
 class CachedStaticFiles(StaticFiles):
@@ -64,11 +66,12 @@ def _error_body(code: str, message: str) -> dict[str, Any]:
     return {"error": {"code": code, "message": message, "request_id": request_id_var.get()}}
 
 
-async def _cleanup_loop(jobs: JobManager) -> None:
+async def _cleanup_loop(jobs: JobManager, cache: ClipCache) -> None:
     while True:
         await asyncio.sleep(_CLEANUP_INTERVAL_SECONDS)
         try:
             await jobs.purge_expired()
+            await asyncio.to_thread(cache.purge_expired)
         except Exception:
             log.exception("cleanup failed")
 
@@ -83,23 +86,35 @@ def create_app(settings: Settings | None = None, provider: TTSProvider | None = 
         store = AudioStore(settings.data_dir)
         removed = store.purge_orphans()
         budget = DailyBudget(settings.daily_char_budget)
-        jobs = JobManager(provider=active_provider, store=store, budget=budget, settings=settings)
+        cache = ClipCache(
+            settings.data_dir / "cache",
+            max_bytes=settings.cache_max_mb * 1024 * 1024,
+            ttl_seconds=settings.cache_ttl_seconds,
+        )
+        expired = cache.purge_expired()
+        jobs = JobManager(
+            provider=active_provider, store=store, budget=budget, settings=settings, cache=cache
+        )
         app.state.container = Container(
             settings=settings,
             provider=active_provider,
             store=store,
             budget=budget,
+            cache=cache,
             jobs=jobs,
             job_limiter=SlidingWindowLimiter(settings.jobs_per_minute, 60.0),
             auth_fail_limiter=SlidingWindowLimiter(10, 60.0),
+            read_limiter=SlidingWindowLimiter(_READS_PER_MINUTE, 60.0),
         )
-        cleanup = asyncio.create_task(_cleanup_loop(jobs), name="cleanup")
+        cleanup = asyncio.create_task(_cleanup_loop(jobs, cache), name="cleanup")
         log.info(
             "startup",
             extra={
                 "provider": active_provider.name,
                 "auth_required": settings.access_token is not None,
                 "orphans_removed": removed,
+                "cache_enabled": cache.enabled,
+                "cache_expired_removed": expired,
             },
         )
         try:

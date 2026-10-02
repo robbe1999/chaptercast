@@ -4,7 +4,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from chaptercast.chunking import normalize_text, split_text
+from chaptercast.chunking import normalize_text, split_chunks, split_text
 
 
 def _squash(text: str) -> str:
@@ -109,3 +109,26 @@ def test_prose_like_text_round_trips(parts: list[tuple[str, str]], max_chars: in
 @given(text=st.text(max_size=1000), max_chars=st.integers(min_value=20, max_value=200))
 def test_chunking_is_deterministic(text: str, max_chars: int) -> None:
     assert split_text(text, max_chars) == split_text(text, max_chars)
+
+
+@settings(deadline=None, max_examples=200)
+@given(text=st.text(max_size=3000), max_chars=st.integers(min_value=20, max_value=300))
+def test_every_paragraph_start_is_accounted_for(text: str, max_chars: int) -> None:
+    """Each paragraph begins either a chunk (flagged) or after a "\\n\\n" inside one."""
+    chunks = split_chunks(text, max_chars)
+    normalized = normalize_text(text)
+    if not normalized:
+        assert chunks == []
+        return
+    assert chunks[0].starts_paragraph
+    starts = sum(c.starts_paragraph for c in chunks) + sum(c.text.count("\n\n") for c in chunks)
+    assert starts == len(normalized.split("\n\n"))
+    assert [c.text for c in chunks] == split_text(text, max_chars)
+
+
+def test_a_paragraph_break_on_a_chunk_boundary_is_flagged() -> None:
+    first, second = "A" * 30 + ".", "B" * 30 + "."
+    chunks = split_chunks(f"{first}\n\n{second}", 40)
+    assert [(c.text, c.starts_paragraph) for c in chunks] == [(first, True), (second, True)]
+    same = split_chunks(f"{first} {second}", 40)
+    assert [c.starts_paragraph for c in same] == [True, False]

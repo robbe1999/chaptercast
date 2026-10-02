@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     elevenlabs_model_id: str = Field(default="eleven_multilingual_v2", pattern=r"^[a-z0-9_]{1,64}$")
     # Restricted to MP3 so duration can be derived from the CBR bitrate.
     elevenlabs_output_format: str = Field(default="mp3_44100_128", pattern=r"^mp3_\d{4,5}_\d{2,3}$")
+    # Models users may pick (comma separated). The default model is always allowed.
+    # Each must support text-to-speech, previous/next-text context and timestamps.
+    allowed_models: str = Field(
+        default="eleven_multilingual_v2,eleven_flash_v2_5,eleven_turbo_v2_5",
+        pattern=r"^[a-z0-9_]{1,64}(,[a-z0-9_]{1,64})*$",
+    )
     tts_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
     tts_max_retries: int = Field(default=4, ge=0, le=8)
 
@@ -62,6 +68,9 @@ class Settings(BaseSettings):
     job_ttl_seconds: int = Field(default=3600, ge=10)
     jobs_per_minute: int = Field(default=10, ge=1)
     max_request_bytes: int = Field(default=256 * 1024, ge=1024)
+    # Re-use synthesised chunks across jobs so edits only pay for what changed. 0 disables.
+    cache_max_mb: int = Field(default=100, ge=0, le=100_000)
+    cache_ttl_seconds: int = Field(default=24 * 3600, ge=60)
 
     # --- Runtime --------------------------------------------------------------
     data_dir: Path = Field(default_factory=lambda: Path(tempfile.gettempdir()) / "chaptercast")
@@ -127,6 +136,13 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def allowed_model_ids(self) -> list[str]:
+        ids = [m for m in self.allowed_models.split(",") if m]
+        if self.elevenlabs_model_id not in ids:
+            ids.insert(0, self.elevenlabs_model_id)
+        return ids
 
     @property
     def mp3_bitrate_kbps(self) -> int:

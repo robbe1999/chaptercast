@@ -46,6 +46,7 @@ def test_public_config(make_client: ClientFactory) -> None:
         "auth_required": False,
         "max_chars_per_job": 1234,
         "chunk_max_chars": 900,
+        "cache_enabled": True,
     }
 
 
@@ -57,7 +58,17 @@ def test_voices(make_client: ClientFactory) -> None:
             "name": "Voice One",
             "category": "premade",
             "description": "A test voice",
-        }
+            "labels": {"accent": "british"},
+            "preview_url": "/api/voices/voice1/preview",
+        },
+        {
+            "voice_id": "voice2",
+            "name": "Voice Two",
+            "category": "premade",
+            "description": None,
+            "labels": {},
+            "preview_url": None,
+        },
     ]
 
 
@@ -219,9 +230,14 @@ def test_endpoints_require_the_token_when_one_is_configured(make_client: ClientF
     client = make_client(access_token=ACCESS_TOKEN)
     for method, path in [
         ("GET", "/api/voices"),
+        ("GET", "/api/voices/voice1/preview"),
+        ("GET", "/api/models"),
+        ("POST", "/api/estimate"),
         ("POST", "/api/jobs"),
         ("GET", f"/api/jobs/{'0' * 32}"),
         ("GET", f"/api/jobs/{'0' * 32}/audio"),
+        ("GET", f"/api/jobs/{'0' * 32}/transcript"),
+        ("GET", f"/api/jobs/{'0' * 32}/captions.srt"),
         ("DELETE", f"/api/jobs/{'0' * 32}"),
     ]:
         response = client.request(method, path, json=JOB if method == "POST" else None)
@@ -415,6 +431,8 @@ def test_secrets_never_appear_in_any_response_or_log(
         client.post("/api/jobs", json=JOB, headers=AUTH),
         client.get(f"/api/jobs/{'0' * 32}", headers=AUTH),
         client.post("/api/jobs", json={"text": SENTINEL_KEY}, headers=AUTH),  # 422
+        client.post("/api/estimate", json={**JOB, "text": SENTINEL_KEY}, headers=AUTH),
+        client.get("/api/models", headers=AUTH),
         client.get("/nope"),
     ]
     for response in responses:
