@@ -5,6 +5,10 @@ Walks a directory tree and fails (exit 1) if it finds anything that looks like a
 credential. It is a fast local guard that complements gitleaks in CI; it is not a
 replacement for it.
 
+Inside a git work tree it scans exactly what *could* be committed: tracked files
+plus untracked files that are not gitignored. A real key in the (ignored) local
+``.env`` is therefore fine, while the same key in any new or tracked file fails.
+
 Usage:
     python scripts/scan_secrets.py [PATH ...]     # defaults to the repo root
 
@@ -15,6 +19,8 @@ that show a deliberately fake value).
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -46,12 +52,33 @@ PATTERNS: dict[str, re.Pattern[str]] = {
 }
 
 
+def _git_candidates(root: Path) -> list[Path] | None:
+    """Files git would let you commit under ``root``, or None outside a work tree."""
+    git = shutil.which("git")
+    if git is None:
+        return None
+    try:
+        result = subprocess.run(  # noqa: S603  (fixed argv, no shell)
+            [git, "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    names = result.stdout.decode("utf-8", errors="surrogateescape").split("\0")
+    return [root / name for name in names if name]
+
+
 def iter_files(root: Path) -> Iterator[Path]:
     if root.is_file():
         yield root
         return
-    for path in root.rglob("*"):
-        if any(part in SKIP_DIRS for part in path.parts):
+    candidates = _git_candidates(root)
+    for path in candidates if candidates is not None else root.rglob("*"):
+        if any(part in SKIP_DIRS for part in path.relative_to(root).parts):
             continue
         if not path.is_file() or path.suffix.lower() in SKIP_SUFFIXES or path.name in SKIP_FILES:
             continue
