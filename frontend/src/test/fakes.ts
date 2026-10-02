@@ -1,19 +1,61 @@
 import { vi } from "vitest";
 import { ApiError, type Api } from "../api/client";
-import type { Config, Job, Voices } from "../api/schemas";
+import type { Config, Estimate, Job, Models, Transcript, Voices } from "../api/schemas";
 
 export const CONFIG: Config = {
   provider: "demo",
   auth_required: false,
   max_chars_per_job: 200,
   chunk_max_chars: 50,
+  cache_enabled: true,
 };
 
 export const VOICES: Voices = {
   provider: "demo",
   voices: [
-    { voice_id: "v1", name: "Aria", category: "demo", description: null },
-    { voice_id: "v2", name: "Orion", category: null, description: null },
+    {
+      voice_id: "v1",
+      name: "Aria",
+      category: "demo",
+      description: null,
+      labels: { accent: "british", use_case: "narrative_story" },
+      preview_url: "/api/voices/v1/preview",
+    },
+    { voice_id: "v2", name: "Orion", category: null, description: "Calm", labels: {}, preview_url: null },
+  ],
+};
+
+export const MODELS: Models = {
+  provider: "demo",
+  default_model_id: "m1",
+  models: [
+    { model_id: "m1", name: "Standard", description: "Full price", cost_multiplier: 1, supports_style: true },
+    { model_id: "m2", name: "Fast", description: "Half price", cost_multiplier: 0.5, supports_style: false },
+  ],
+};
+
+export function makeEstimate(overrides: Partial<Estimate> = {}): Estimate {
+  return {
+    characters: 40,
+    chunks: 2,
+    cached_chunks: 0,
+    billable_characters: 40,
+    cost_multiplier: 1,
+    estimated_credits: 40,
+    max_chars_per_job: 200,
+    within_limit: true,
+    daily_budget_remaining: 25_000,
+    ...overrides,
+  };
+}
+
+export const TRANSCRIPT: Transcript = {
+  duration_seconds: 3,
+  words: [
+    { text: "Hello", start: 0, end: 0.5, paragraph: 0 },
+    { text: "there.", start: 0.6, end: 1.2, paragraph: 0 },
+    { text: "Next", start: 1.5, end: 2, paragraph: 1 },
+    { text: "part.", start: 2.1, end: 2.8, paragraph: 1 },
   ],
 };
 
@@ -22,11 +64,16 @@ export function makeJob(overrides: Partial<Job> = {}): Job {
     id: "a".repeat(32),
     status: "queued",
     voice_id: "v1",
+    model_id: "m1",
     char_count: 40,
     progress: { completed_chunks: 0, total_chunks: 2 },
+    cached_chunks: 0,
+    billed_characters: 0,
     created_at: "2026-10-01T10:00:00Z",
     duration_seconds: null,
     audio_url: null,
+    transcript_url: null,
+    captions: null,
     error: null,
     ...overrides,
   };
@@ -42,6 +89,11 @@ export function makeApi(sequence: Job[], overrides: Partial<Api> = {}): Api & { 
     },
     getConfig: vi.fn(async () => CONFIG),
     listVoices: vi.fn(async () => VOICES),
+    listModels: vi.fn(async () => MODELS),
+    estimate: vi.fn(async () => makeEstimate()),
+    getTranscript: vi.fn(async () => TRANSCRIPT),
+    fetchCaptions: vi.fn(async () => new Blob(["WEBVTT"], { type: "text/vtt" })),
+    fetchPreview: vi.fn(async () => new Blob(["ID3"], { type: "audio/mpeg" })),
     createJob: vi.fn(async () => queue.shift() ?? makeJob()),
     getJob: vi.fn(async () => queue.shift() ?? queue[queue.length - 1] ?? makeJob()),
     cancelJob: vi.fn(async () => undefined),
@@ -63,5 +115,8 @@ export const SUCCEEDED = (id = "a".repeat(32)) =>
     status: "succeeded",
     progress: { completed_chunks: 2, total_chunks: 2 },
     duration_seconds: 75,
+    billed_characters: 40,
     audio_url: `/api/jobs/${id}/audio`,
+    transcript_url: `/api/jobs/${id}/transcript`,
+    captions: { srt: `/api/jobs/${id}/captions.srt`, vtt: `/api/jobs/${id}/captions.vtt` },
   });
