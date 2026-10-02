@@ -1,10 +1,32 @@
 {
   "components": {
     "schemas": {
+      "CaptionLinks": {
+        "properties": {
+          "srt": {
+            "title": "Srt",
+            "type": "string"
+          },
+          "vtt": {
+            "title": "Vtt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "srt",
+          "vtt"
+        ],
+        "title": "CaptionLinks",
+        "type": "object"
+      },
       "ConfigResponse": {
         "properties": {
           "auth_required": {
             "title": "Auth Required",
+            "type": "boolean"
+          },
+          "cache_enabled": {
+            "title": "Cache Enabled",
             "type": "boolean"
           },
           "chunk_max_chars": {
@@ -28,7 +50,8 @@
           "provider",
           "auth_required",
           "max_chars_per_job",
-          "chunk_max_chars"
+          "chunk_max_chars",
+          "cache_enabled"
         ],
         "title": "ConfigResponse",
         "type": "object"
@@ -36,6 +59,19 @@
       "CreateJobRequest": {
         "additionalProperties": false,
         "properties": {
+          "model_id": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9_]{1,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Model to use; one of GET /api/models. Defaults to the server default.",
+            "title": "Model Id"
+          },
           "text": {
             "description": "The text to narrate.",
             "maxLength": 200000,
@@ -48,6 +84,16 @@
             "pattern": "^[A-Za-z0-9_-]{1,64}$",
             "title": "Voice Id",
             "type": "string"
+          },
+          "voice_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VoiceSettingsBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -90,6 +136,107 @@
           "error"
         ],
         "title": "ErrorResponse",
+        "type": "object"
+      },
+      "EstimateRequest": {
+        "additionalProperties": false,
+        "description": "Same shape as a job request: an estimate is a dry run of exactly that job.",
+        "properties": {
+          "model_id": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9_]{1,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Model to use; one of GET /api/models. Defaults to the server default.",
+            "title": "Model Id"
+          },
+          "text": {
+            "description": "The text to narrate.",
+            "maxLength": 200000,
+            "title": "Text",
+            "type": "string"
+          },
+          "voice_id": {
+            "description": "Voice identifier.",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "title": "Voice Id",
+            "type": "string"
+          },
+          "voice_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VoiceSettingsBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "text",
+          "voice_id"
+        ],
+        "title": "EstimateRequest",
+        "type": "object"
+      },
+      "EstimateResponse": {
+        "properties": {
+          "billable_characters": {
+            "title": "Billable Characters",
+            "type": "integer"
+          },
+          "cached_chunks": {
+            "description": "Chunks already generated recently: free to reuse.",
+            "title": "Cached Chunks",
+            "type": "integer"
+          },
+          "characters": {
+            "title": "Characters",
+            "type": "integer"
+          },
+          "chunks": {
+            "title": "Chunks",
+            "type": "integer"
+          },
+          "cost_multiplier": {
+            "title": "Cost Multiplier",
+            "type": "number"
+          },
+          "daily_budget_remaining": {
+            "title": "Daily Budget Remaining",
+            "type": "integer"
+          },
+          "estimated_credits": {
+            "title": "Estimated Credits",
+            "type": "integer"
+          },
+          "max_chars_per_job": {
+            "title": "Max Chars Per Job",
+            "type": "integer"
+          },
+          "within_limit": {
+            "title": "Within Limit",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "characters",
+          "chunks",
+          "cached_chunks",
+          "billable_characters",
+          "cost_multiplier",
+          "estimated_credits",
+          "max_chars_per_job",
+          "within_limit",
+          "daily_budget_remaining"
+        ],
+        "title": "EstimateResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -154,6 +301,26 @@
             ],
             "title": "Audio Url"
           },
+          "billed_characters": {
+            "description": "Characters actually sent to the provider.",
+            "title": "Billed Characters",
+            "type": "integer"
+          },
+          "cached_chunks": {
+            "description": "Chunks reused from the cache instead of re-generated.",
+            "title": "Cached Chunks",
+            "type": "integer"
+          },
+          "captions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CaptionLinks"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "char_count": {
             "title": "Char Count",
             "type": "integer"
@@ -188,6 +355,10 @@
             "title": "Id",
             "type": "string"
           },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
           "progress": {
             "$ref": "#/components/schemas/JobProgress"
           },
@@ -202,6 +373,17 @@
             "title": "Status",
             "type": "string"
           },
+          "transcript_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcript Url"
+          },
           "voice_id": {
             "title": "Voice Id",
             "type": "string"
@@ -211,14 +393,146 @@
           "id",
           "status",
           "voice_id",
+          "model_id",
           "char_count",
           "progress",
+          "cached_chunks",
+          "billed_characters",
           "created_at",
           "duration_seconds",
           "audio_url",
+          "transcript_url",
+          "captions",
           "error"
         ],
         "title": "JobResponse",
+        "type": "object"
+      },
+      "ModelResponse": {
+        "properties": {
+          "cost_multiplier": {
+            "title": "Cost Multiplier",
+            "type": "number"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "supports_style": {
+            "title": "Supports Style",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "model_id",
+          "name",
+          "description",
+          "cost_multiplier",
+          "supports_style"
+        ],
+        "title": "ModelResponse",
+        "type": "object"
+      },
+      "ModelsResponse": {
+        "properties": {
+          "default_model_id": {
+            "title": "Default Model Id",
+            "type": "string"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelResponse"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "provider": {
+            "enum": [
+              "elevenlabs",
+              "demo"
+            ],
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "default_model_id",
+          "models"
+        ],
+        "title": "ModelsResponse",
+        "type": "object"
+      },
+      "TranscriptResponse": {
+        "properties": {
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "words": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptWord"
+            },
+            "title": "Words",
+            "type": "array"
+          }
+        },
+        "required": [
+          "duration_seconds",
+          "words"
+        ],
+        "title": "TranscriptResponse",
+        "type": "object"
+      },
+      "TranscriptWord": {
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "number"
+          },
+          "paragraph": {
+            "title": "Paragraph",
+            "type": "integer"
+          },
+          "start": {
+            "description": "Seconds from the start of the audio.",
+            "title": "Start",
+            "type": "number"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "start",
+          "end",
+          "paragraph"
+        ],
+        "title": "TranscriptWord",
         "type": "object"
       },
       "ValidationError": {
@@ -285,9 +599,27 @@
             ],
             "title": "Description"
           },
+          "labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Labels",
+            "type": "object"
+          },
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "preview_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview Url"
           },
           "voice_id": {
             "title": "Voice Id",
@@ -298,9 +630,75 @@
           "voice_id",
           "name",
           "category",
-          "description"
+          "description",
+          "labels",
+          "preview_url"
         ],
         "title": "VoiceResponse",
+        "type": "object"
+      },
+      "VoiceSettingsBody": {
+        "additionalProperties": false,
+        "description": "Optional voice tuning. Omitted fields use the voice's stored defaults.",
+        "properties": {
+          "similarity_boost": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How closely to match the original voice.",
+            "title": "Similarity Boost"
+          },
+          "speed": {
+            "anyOf": [
+              {
+                "maximum": 1.2,
+                "minimum": 0.7,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Speaking rate.",
+            "title": "Speed"
+          },
+          "stability": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Lower is more expressive, higher more consistent.",
+            "title": "Stability"
+          },
+          "style": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Style exaggeration (models that support it).",
+            "title": "Style"
+          }
+        },
+        "title": "VoiceSettingsBody",
         "type": "object"
       },
       "VoicesResponse": {
@@ -353,6 +751,64 @@
           }
         },
         "summary": "Public client configuration"
+      }
+    },
+    "/api/estimate": {
+      "post": {
+        "operationId": "estimate_api_estimate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EstimateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EstimateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid access token"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit or daily budget exceeded"
+          }
+        },
+        "summary": "Dry-run a job: sections, cache hits and credits, without spending anything"
       }
     },
     "/api/jobs": {
@@ -581,6 +1037,171 @@
         "summary": "Download the finished audio (supports Range requests)"
       }
     },
+    "/api/jobs/{job_id}/captions.{fmt}": {
+      "get": {
+        "operationId": "get_captions_api_jobs__job_id__captions__fmt__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "fmt",
+            "required": true,
+            "schema": {
+              "title": "Fmt",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/x-subrip": {},
+              "text/vtt": {}
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid access token"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit or daily budget exceeded"
+          }
+        },
+        "summary": "Download captions as SubRip (.srt) or WebVTT (.vtt)"
+      }
+    },
+    "/api/jobs/{job_id}/transcript": {
+      "get": {
+        "operationId": "get_transcript_api_jobs__job_id__transcript_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranscriptResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid access token"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit or daily budget exceeded"
+          }
+        },
+        "summary": "Word-level timings for the read-along view"
+      }
+    },
+    "/api/models": {
+      "get": {
+        "operationId": "list_models_api_models_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid access token"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit or daily budget exceeded"
+          }
+        },
+        "summary": "List the speech models this server offers"
+      }
+    },
     "/api/voices": {
       "get": {
         "operationId": "list_voices_api_voices_get",
@@ -617,6 +1238,65 @@
           }
         },
         "summary": "List available voices"
+      }
+    },
+    "/api/voices/{voice_id}/preview": {
+      "get": {
+        "operationId": "voice_preview_api_voices__voice_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "voice_id",
+            "required": true,
+            "schema": {
+              "title": "Voice Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "audio/mpeg": {},
+              "audio/wav": {}
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Missing or invalid access token"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Rate limit or daily budget exceeded"
+          }
+        },
+        "summary": "A short, free sample of a voice"
       }
     }
   }

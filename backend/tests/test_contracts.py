@@ -5,8 +5,12 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from types import ModuleType
+
+import pytest
 
 from chaptercast.main import create_app
 from tests.conftest import SENTINEL_KEY, make_settings
@@ -88,3 +92,19 @@ def test_gitignore_protects_env_files() -> None:
     patterns = (ROOT / ".gitignore").read_text().splitlines()
     assert ".env" in patterns
     assert "!.env.example" in patterns
+    assert "*.private.md" in patterns  # personal notes stay out of git and the image
+    assert "*.private.md" in (ROOT / ".dockerignore").read_text().splitlines()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_scanner_checks_what_could_be_committed_not_ignored_files(tmp_path: Path) -> None:
+    """A real key in the gitignored .env is expected; the same key anywhere else is a leak."""
+    scanner = _load_scanner()
+    git = shutil.which("git")
+    assert git is not None
+    subprocess.run([git, "init", "-q", str(tmp_path)], check=True)  # noqa: S603
+    (tmp_path / ".gitignore").write_text(".env\n")
+    (tmp_path / ".env").write_text(f"ELEVENLABS_API_KEY={SENTINEL_KEY}\n")
+    (tmp_path / "notes.txt").write_text(f"{SENTINEL_KEY}\n")  # untracked, not ignored
+    flagged = {p.name for p, _, _ in scanner.scan([tmp_path])}
+    assert flagged == {"notes.txt"}

@@ -6,7 +6,7 @@ This is a small service that holds one valuable secret (a paid API key) and spen
 
 1. **The ElevenLabs API key.** Compromise means arbitrary spend and possible account abuse.
 2. **Credits.** Even without the key, an open endpoint can burn them.
-3. **User text and generated audio.** May be private manuscripts.
+3. **User text, generated audio and cached sections.** May be private manuscripts.
 4. **The access token**, if one is configured.
 
 ## Trust boundaries
@@ -40,6 +40,12 @@ Everything from the browser is untrusted. The key exists only inside the API pro
 | 15 | CI compromise | Workflows run with `contents: read`; only CodeQL gets `security-events: write`; no secrets are needed to build or test | Workflow files |
 | 16 | Container breakout or persistence | Non-root user, read-only root filesystem, tmpfs for scratch, all capabilities dropped, `no-new-privileges`, PID and memory limits, published on localhost only | `docker-compose.yml`; CI smoke test runs with the same flags |
 | 17 | Private audio left on disk | Directory `0700`, files `0600`, atomic writes, deletion on start-over, TTL expiry, orphan purge at boot | `TestStore`, `test_finished_jobs_expire_after_the_ttl` |
+| 18 | Key sent to, or server tricked into fetching from, a third party via voice previews (SSRF) | Separate HTTP client with no default headers; only `https` URLs on an allowlisted CDN host and default port, only URLs the ElevenLabs API itself returned; no redirects; 2 MB cap; per-client rate limit | `test_previews_are_fetched_without_the_api_key_and_cached`, `test_previews_from_unexpected_urls_are_never_fetched`, `test_preview_redirects_and_non_audio_bytes_are_rejected` |
+| 19 | Third-party content served with a dangerous type | The preview's content type is derived from its magic bytes (MP3, WAV, Ogg) and set by the server; anything else is refused. The CDN's own header is ignored | `test_preview_audio_is_identified_by_its_bytes` |
+| 20 | Cached audio outliving the user's "delete" | Cache file names are SHA-256 digests, so they reveal no text; entries expire (`CACHE_TTL_SECONDS`, default 1 day) and are size-bounded; `CACHE_MAX_MB=0` disables caching; the UI states the retention | `test_file_names_reveal_nothing_about_the_text`, `test_entries_expire`, `test_the_cache_can_be_disabled` |
+| 21 | Cache poisoning or path traversal through keys | Keys are computed by the server, never accepted from clients, and must match `^[0-9a-f]{64}$` before touching the filesystem; a corrupt entry is a miss | `test_bad_keys_and_oversized_clips_are_ignored`, `test_corrupt_entries_are_misses_not_errors` |
+| 22 | Markup injection through captions | WebVTT cue text is HTML-escaped; `-->` is neutralised in SRT | `test_webvtt_format_escapes_markup`, `test_srt_format` |
+| 23 | Spend on unexpected models | Users can choose only models on the operator's allowlist that the provider actually lists; unknown ids are rejected with `422` | `test_elevenlabs_models_are_limited_to_the_allowlist` |
 
 ## Secret handling policy
 
@@ -62,12 +68,14 @@ Everything from the browser is untrusted. The key exists only inside the API pro
 - [ ] Keep `CHAPTERCAST_DAILY_CHAR_BUDGET` at a value you are happy to lose in a day.
 - [ ] Set a spend limit on the ElevenLabs account.
 - [ ] Leave `CHAPTERCAST_ENABLE_DOCS` off in production.
+- [ ] Review `CHAPTERCAST_ALLOWED_MODELS`, and decide on cache retention (`CHAPTERCAST_CACHE_TTL_SECONDS`, or `CHAPTERCAST_CACHE_MAX_MB=0` to disable it).
 
 ## Known limitations
 
 - Access control is a single shared token. There are no per-user identities, quotas or audit trail.
 - Rate limits and the daily budget are in-process. With multiple replicas each has its own counters (see the scaling path).
 - A job id is a capability: anyone holding it (and the token, if configured) can read that job's audio.
+- The clip cache is shared across all users of one server. An estimate can reveal that identical text was recently generated with the same voice and settings. That is acceptable behind one shared token; a multi-tenant deployment would add a per-user salt to the cache key, or disable the cache.
 - The access token lives in `sessionStorage`, so any script running on the page could read it. The strict CSP (no inline script, same-origin scripts only) is the mitigation; there is no cookie-based alternative that avoids the CSRF trade-off.
 - Text is processed by a third party. Treat anything submitted as shared with the provider.
 - The `blob:` audio approach buffers the file client side.

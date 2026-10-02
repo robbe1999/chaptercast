@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, type Api } from "../api/client";
-import type { Job } from "../api/schemas";
+import type { Job, JobInput } from "../api/schemas";
 
 export type JobState =
   | { phase: "idle" }
@@ -69,7 +69,7 @@ export function useJob(api: Api, { pollIntervalMs = 700 }: UseJobOptions = {}) {
   );
 
   const start = useCallback(
-    async (text: string, voiceId: string) => {
+    async (input: JobInput) => {
       controller.current?.abort();
       releaseAudio();
       const ctl = new AbortController();
@@ -77,7 +77,7 @@ export function useJob(api: Api, { pollIntervalMs = 700 }: UseJobOptions = {}) {
       setState({ phase: "submitting" });
 
       try {
-        let job = await api.createJob({ text, voiceId }, ctl.signal);
+        let job = await api.createJob(input, ctl.signal);
         jobId.current = job.id;
         setState({ phase: "running", job });
 

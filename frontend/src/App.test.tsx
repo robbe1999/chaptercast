@@ -1,9 +1,9 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { ApiError } from "./api/client";
-import { CONFIG, SUCCEEDED, VOICES, makeApi, makeJob, unauthorized } from "./test/fakes";
+import { CONFIG, SUCCEEDED, VOICES, makeApi, makeEstimate, makeJob, unauthorized } from "./test/fakes";
 
 const FAST = 1;
 
@@ -54,7 +54,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Generate audio" }));
 
     expect(api.createJob).toHaveBeenCalledWith(
-      { text: "A short chapter.", voiceId: "v2" },
+      { text: "A short chapter.", voiceId: "v2", modelId: "m1" },
       expect.any(AbortSignal),
     );
     expect(await screen.findByRole("heading", { name: "Your audio is ready" })).toBeInTheDocument();
@@ -149,5 +149,147 @@ describe("App", () => {
   it("states plainly that it is unofficial and that text goes to the provider", async () => {
     render(<App api={makeApi([])} pollIntervalMs={FAST} />);
     expect(await screen.findByText(/not affiliated with ElevenLabs/i)).toBeInTheDocument();
+  });
+
+  // ------------------------------------------------------------ narration options
+  it("sends the chosen model and, only when opted in, the voice settings", async () => {
+    const user = userEvent.setup();
+    const api = makeApi([SUCCEEDED()]);
+    render(<App api={api} pollIntervalMs={FAST} estimateDelayMs={0} />);
+
+    await user.type(await screen.findByLabelText("Chapter text"), "Hello.");
+    expect(screen.getByRole("option", { name: "Fast · 0.5× credits" })).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Model"), "m2");
+    expect(screen.queryByLabelText("Stability")).not.toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Fine-tune the voice"));
+    expect(screen.getByLabelText("Style exaggeration")).toBeDisabled(); // m2 has no style support
+    fireEvent.change(screen.getByLabelText("Speed"), { target: { value: "1.1" } });
+    await user.click(screen.getByRole("button", { name: "Generate audio" }));
+
+    expect(api.createJob).toHaveBeenCalledWith(
+      {
+        text: "Hello.",
+        voiceId: "v1",
+        modelId: "m2",
+        voiceSettings: { stability: 0.5, similarity_boost: 0.75, speed: 1.1 },
+      },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("remembers voice, model and settings for next time", async () => {
+    const user = userEvent.setup();
+    const first = render(<App api={makeApi([])} pollIntervalMs={FAST} />);
+    await user.selectOptions(await screen.findByLabelText("Voice"), "v2");
+    await user.selectOptions(screen.getByLabelText("Model"), "m2");
+    first.unmount();
+
+    render(<App api={makeApi([])} pollIntervalMs={FAST} />);
+    expect(await screen.findByLabelText("Voice")).toHaveValue("v2");
+    expect(screen.getByLabelText("Model")).toHaveValue("m2");
+  });
+
+  it("ignores remembered choices the server no longer offers", async () => {
+    window.localStorage.setItem("chaptercast.prefs", JSON.stringify({ voiceId: "gone", modelId: "gone" }));
+    render(<App api={makeApi([])} pollIntervalMs={FAST} />);
+    expect(await screen.findByLabelText("Voice")).toHaveValue("v1");
+    expect(screen.getByLabelText("Model")).toHaveValue("m1");
+  });
+
+  // -------------------------------------------------------------------- estimate
+  it("shows the live cost estimate, including sections reused from the cache", async () => {
+    const user = userEvent.setup();
+    const api = makeApi([], {
+      estimate: vi.fn(async () =>
+        makeEstimate({ chunks: 3, cached_chunks: 2, billable_characters: 12, estimated_credits: 6 }),
+      ),
+    });
+    render(<App api={api} pollIntervalMs={FAST} estimateDelayMs={0} />);
+    await user.type(await screen.findByLabelText("Chapter text"), "Some text.");
+    expect(await screen.findByText(/≈ 6 credits/)).toBeInTheDocument();
+    expect(screen.getByText(/3 sections \(2 already generated\)/)).toBeInTheDocument();
+    expect(screen.getByText(/25,000 characters left/)).toBeInTheDocument();
+  });
+
+  it("says when a re-generation is free and warns when the budget is short", async () => {
+    const estimate = vi
+      .fn()
+      .mockResolvedValueOnce(makeEstimate({ cached_chunks: 2, billable_characters: 0, estimated_credits: 0 }))
+      .mockResolvedValue(makeEstimate({ billable_characters: 500, daily_budget_remaining: 100 }));
+    render(<App api={makeApi([], { estimate })} pollIntervalMs={FAST} estimateDelayMs={0} />);
+    const textarea = await screen.findByLabelText("Chapter text");
+    fireEvent.change(textarea, { target: { value: "Cached." } });
+    expect(await screen.findByText("Free to generate")).toBeInTheDocument();
+    fireEvent.change(textarea, { target: { value: "Something new." } });
+    expect(await screen.findByText(/only 100 are left/)).toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------- import
+  it("imports a Markdown file as narration text", async () => {
+    const user = userEvent.setup();
+    render(<App api={makeApi([])} pollIntervalMs={FAST} />);
+    await screen.findByLabelText("Chapter text");
+    const file = new File(["# Chapter 1\nIt was **dark**."], "chapter.md", { type: "text/markdown" });
+    await user.upload(screen.getByLabelText("Import a text or Markdown file"), file);
+    await waitFor(() => expect(screen.getByLabelText("Chapter text")).toHaveValue("Chapter 1.\n\nIt was dark."));
+  });
+
+  it("explains why a file cannot be imported", async () => {
+    render(<App api={makeApi([])} pollIntervalMs={FAST} />);
+    const textarea = await screen.findByLabelText("Chapter text");
+    const file = new File(["%PDF"], "book.pdf", { type: "application/pdf" });
+    fireEvent.drop(textarea, { dataTransfer: { files: [file] } });
+    expect(await screen.findByRole("alert")).toHaveTextContent(/only .txt and .md/i);
+  });
+
+  // --------------------------------------------------------------------- preview
+  it("plays a free voice preview and describes the voice", async () => {
+    const user = userEvent.setup();
+    const api = makeApi([]);
+    render(<App api={api} pollIntervalMs={FAST} />);
+    expect(await screen.findByText("british · narrative story")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Preview Aria" }));
+    expect(api.fetchPreview).toHaveBeenCalledWith("v1", expect.any(AbortSignal));
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
+    await user.click(await screen.findByRole("button", { name: "Stop voice preview" }));
+    expect(screen.getByRole("button", { name: "Preview Aria" })).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("Voice"), "v2");
+    expect(screen.getByRole("button", { name: "Preview Orion" })).toBeDisabled(); // no sample
+    expect(screen.getByText("Calm")).toBeInTheDocument();
+  });
+
+  // ------------------------------------------------------------------ read-along
+  it("shows a read-along transcript and downloads captions", async () => {
+    const user = userEvent.setup();
+    const api = makeApi([SUCCEEDED()]);
+    render(<App api={api} pollIntervalMs={FAST} />);
+    await user.type(await screen.findByLabelText("Chapter text"), "Hello there. Next part.");
+    await user.click(screen.getByRole("button", { name: "Generate audio" }));
+
+    expect(await screen.findByRole("heading", { name: "Read along" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Transcript")).toHaveTextContent("Hello there. Next part.");
+    const save = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    await user.click(screen.getByRole("button", { name: "Captions .srt" }));
+    expect(api.fetchCaptions).toHaveBeenCalledWith(SUCCEEDED().id, "srt");
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    save.mockRestore();
+
+    await user.click(screen.getByText("Next"));
+    expect((screen.getByLabelText("Narrated audio") as HTMLAudioElement).currentTime).toBe(1.5);
+  });
+
+  it("works without a transcript when the provider gave no timings", async () => {
+    const user = userEvent.setup();
+    const api = makeApi([{ ...SUCCEEDED(), transcript_url: null, captions: null }]);
+    render(<App api={api} pollIntervalMs={FAST} />);
+    await user.type(await screen.findByLabelText("Chapter text"), "Hello.");
+    await user.click(screen.getByRole("button", { name: "Generate audio" }));
+    expect(await screen.findByRole("heading", { name: "Your audio is ready" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Transcript")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /captions/i })).not.toBeInTheDocument();
+    expect(api.getTranscript).not.toHaveBeenCalled();
   });
 });
