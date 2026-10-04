@@ -8,6 +8,11 @@ Turn a chapter of text into a narrated audiobook with the [ElevenLabs](https://e
 
 > Unofficial project. Not affiliated with or endorsed by ElevenLabs.
 
+<p align="center">
+  <img src="docs/media/demo.gif" width="900"
+       alt="ChapterCast demo: choosing the Flash model halves the credit estimate, generating the audio, then the read-along highlights each word as it is spoken and jumps when a word is clicked">
+</p>
+
 Paste or import a chapter, pick a voice, see what it will cost, then play it back with a word-by-word read-along and download the audio and captions. The interesting part is everything between "paste" and "play": splitting text at natural boundaries, calling the API concurrently without tripping its limits, surviving transient failures, keeping prosody continuous across chunk boundaries, never paying twice for the same sentence, and doing all of it without putting the API key, or your credits, at risk.
 
 ### Features
