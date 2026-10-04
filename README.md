@@ -148,7 +148,7 @@ make openapi    # regenerate docs/openapi.json after an API change
 ```
 
 **Backend** (`backend/chaptercast`): Python 3.11+, FastAPI, httpx, pydantic v2. `ruff` and `mypy --strict` are enforced.
-**Frontend** (`frontend/src`): React 18, TypeScript (`strict`, `noUncheckedIndexedAccess`), Vite. Responses are validated at runtime with zod.
+**Frontend** (`frontend/src`): React 18, TypeScript (`strict`, `noUncheckedIndexedAccess`), Vite. Responses are validated at runtime with zod. One stylesheet built on design tokens (light and dark), self-hosted Inter, and an app-style two-column layout on desktop that stacks on mobile.
 
 What the tests cover, beyond the happy path:
 

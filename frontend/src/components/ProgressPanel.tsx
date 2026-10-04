@@ -18,7 +18,7 @@ export function ProgressPanel({ job, onCancel }: Props) {
         : `Narrating section ${Math.min(done + 1, total)} of ${total}`;
 
   return (
-    <section className="card" aria-labelledby="progress-title">
+    <section className="panel narrow" aria-labelledby="progress-title">
       <h2 id="progress-title">Generating audio</h2>
       {/* A native <progress> needs no inline style, which the strict CSP forbids. */}
       <progress
