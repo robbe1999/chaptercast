@@ -33,7 +33,7 @@ make dev-api          # terminal 1: API on :8000 (demo mode)
 make dev-web          # terminal 2: UI on http://localhost:5173
 ```
 
-Or in a hardened container: `docker compose up --build` and open http://127.0.0.1:8000.
+Or in a hardened container: `docker compose up --build` and open http://127.0.0.1:8000. Stop `make dev-api` first: both use port 8000, and some Docker setups (Rancher Desktop, for example) let both bind it without an error, so the browser may reach the wrong one.
 
 ### Using real ElevenLabs voices
 

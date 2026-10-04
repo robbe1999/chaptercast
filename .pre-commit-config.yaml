@@ -15,7 +15,7 @@ repos:
       - id: ruff-format
         files: ^backend/
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.21.2
+    rev: v8.24.3 # keep in step with the CI version in security.yml
     hooks:
       - id: gitleaks
   - repo: local
