@@ -372,7 +372,11 @@ def test_api_docs_are_off_by_default(make_client: ClientFactory) -> None:
 def test_api_docs_can_be_enabled(make_client: ClientFactory) -> None:
     client = make_client(enable_docs=True)
     assert client.get("/openapi.json").status_code == 200
-    assert "cdn.jsdelivr.net" in client.get("/docs").headers["content-security-policy"]
+    csp = client.get("/docs").headers["content-security-policy"]
+    directives = {d.split()[0]: d.split()[1:] for d in csp.split(";") if d.strip()}
+    # Only the docs page may load Swagger UI from its CDN, and only as an exact origin.
+    assert "https://cdn.jsdelivr.net" in directives["script-src"]
+    assert "https://cdn.jsdelivr.net" not in client.get("/").headers["content-security-policy"]
 
 
 def test_no_cors_headers_by_default(make_client: ClientFactory) -> None:
