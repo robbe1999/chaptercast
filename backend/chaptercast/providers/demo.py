@@ -38,9 +38,9 @@ _TOKEN_RE = re.compile(r"\S+|\s+")
 _PREVIEW_TEXT = "Hello. This is a short preview of my voice."
 
 _VOICES = (
-    Voice("demo-aria", "Aria (demo)", "demo", "Low register tones", {"pitch": "low"}, True),
-    Voice("demo-orion", "Orion (demo)", "demo", "Mid register tones", {"pitch": "mid"}, True),
-    Voice("demo-lyra", "Lyra (demo)", "demo", "High register tones", {"pitch": "high"}, True),
+    Voice("demo-aria", "Aria (demo)", "demo", "Low register tones", {"pitch": "low pitch"}, True),
+    Voice("demo-orion", "Orion (demo)", "demo", "Mid register tones", {"pitch": "mid pitch"}, True),
+    Voice("demo-lyra", "Lyra (demo)", "demo", "High register tones", {"pitch": "high pitch"}, True),
 )
 _BASE_HZ = {"demo-aria": 196.0, "demo-orion": 261.63, "demo-lyra": 392.0}
 

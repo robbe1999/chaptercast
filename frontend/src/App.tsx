@@ -113,11 +113,24 @@ export default function App({ api: injected, pollIntervalMs, estimateDelayMs }: 
   const busy = state.phase === "submitting" || state.phase === "running";
 
   return (
-    <main className="shell">
-      <header>
-        <h1>ChapterCast</h1>
-        <p className="muted">Paste a chapter. Pick a voice. Get an audiobook you can read along with.</p>
+    <div className="shell">
+      <header className="topbar">
+        <div className="brand">
+          <Logo />
+          <span className="wordmark">ChapterCast</span>
+        </div>
+        {ready && (
+          <span className={ready.config.provider === "demo" ? "pill warn" : "pill ok"}>
+            {ready.config.provider === "demo" ? "Demo mode" : "ElevenLabs connected"}
+          </span>
+        )}
       </header>
+
+      <main className="content">
+        <div className="intro">
+          <h1>Turn a chapter into an audiobook</h1>
+          <p className="muted">Paste or import your text, pick a voice, and listen with a word-by-word read-along.</p>
+        </div>
 
       {boot.stage === "loading" && <p role="status">Loading…</p>}
 
@@ -183,11 +196,25 @@ export default function App({ api: injected, pollIntervalMs, estimateDelayMs }: 
         </>
       )}
 
-      <footer className="muted small">
+      </main>
+
+      <footer className="footer muted small">
         Unofficial demo project, not affiliated with ElevenLabs. Text you submit is sent to the speech
         provider to generate audio.
       </footer>
-    </main>
+    </div>
+  );
+}
+
+function Logo() {
+  // A small waveform mark; inline SVG keeps it CSP-safe and theme-aware via currentColor.
+  return (
+    <svg className="logo" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="9" width="2.5" height="6" rx="1.25" />
+      <rect x="8" y="5" width="2.5" height="14" rx="1.25" />
+      <rect x="13" y="7" width="2.5" height="10" rx="1.25" />
+      <rect x="18" y="10" width="2.5" height="4" rx="1.25" />
+    </svg>
   );
 }
 
@@ -244,86 +271,93 @@ function Composer(props: ComposerProps) {
   };
 
   return (
-    <form className="card" onSubmit={submit} aria-labelledby="compose-title">
-      <h2 id="compose-title">Your text</h2>
+    <form className="workspace" onSubmit={submit} aria-labelledby="compose-title">
+      <section className="panel editor">
+        <div className="panel-head">
+          <h2 id="compose-title">Your text</h2>
+          <div className="row tight">
+            <button type="button" className="ghost" onClick={() => fileInput.current?.click()}>
+              Import .txt or .md
+            </button>
+            <button type="button" className="ghost" onClick={() => onText(SAMPLE_TEXT)}>
+              Use sample text
+            </button>
+          </div>
+        </div>
 
-      <label htmlFor="text">Chapter text</label>
-      <textarea
-        id="text"
-        rows={12}
-        value={text}
-        className={dragging ? "dropping" : undefined}
-        onChange={(event) => onText(event.target.value)}
-        onDragOver={(event) => {
-          event.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={drop}
-        aria-describedby="text-meta"
-        aria-invalid={tooLong ? true : undefined}
-        placeholder="Paste or type the text to narrate, or drop a .txt or .md file here…"
-      />
-      <div id="text-meta" className="meta">
-        <span className={tooLong ? "error" : "muted"} aria-live="polite">
-          {length.toLocaleString()} / {max.toLocaleString()} characters
-        </span>
-        <span className="row">
-          <button type="button" className="link" onClick={() => fileInput.current?.click()}>
-            Import .txt or .md
+        <label htmlFor="text" className="visually-hidden">
+          Chapter text
+        </label>
+        <textarea
+          id="text"
+          value={text}
+          className={dragging ? "dropping" : undefined}
+          onChange={(event) => onText(event.target.value)}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={drop}
+          aria-describedby="text-meta"
+          aria-invalid={tooLong ? true : undefined}
+          placeholder="Paste or type the text to narrate, or drop a .txt or .md file here…"
+        />
+        <input
+          ref={fileInput}
+          type="file"
+          accept={IMPORT_ACCEPT}
+          className="visually-hidden"
+          tabIndex={-1}
+          aria-label="Import a text or Markdown file"
+          onChange={(event) => {
+            void importFile(event.target.files?.[0]);
+            event.target.value = ""; // allow re-importing the same file
+          }}
+        />
+
+        <div id="text-meta" className="meta">
+          <span className={tooLong ? "error" : "muted"} aria-live="polite">
+            {length.toLocaleString()} / {max.toLocaleString()} characters
+          </span>
+        </div>
+        {importError && (
+          <p role="alert" className="error small">
+            {importError}
+          </p>
+        )}
+        {tooLong && (
+          <p role="alert" className="error small">
+            That is {(length - max).toLocaleString()} characters over the limit. Trim the text or split it
+            into parts.
+          </p>
+        )}
+      </section>
+
+      <aside className="panel sidebar" aria-label="Voice and settings">
+        <VoicePicker api={api} voices={voices} value={voiceId} onChange={props.onVoice} />
+        <NarrationSettings
+          models={models}
+          modelId={props.modelId}
+          onModel={props.onModel}
+          custom={props.custom}
+          onCustom={props.onCustom}
+          settings={props.tuned}
+          onSettings={props.onTuned}
+        />
+
+        <div className="sidebar-foot">
+          {!empty && !tooLong && <EstimateLine estimate={estimate} minutes={minutes} />}
+          {notice && (
+            <p role={notice.kind === "error" ? "alert" : "status"} className={`${notice.kind} small`}>
+              {notice.message}
+            </p>
+          )}
+          <button type="submit" className="primary block" disabled={empty || tooLong || !voiceId}>
+            Generate audio
           </button>
-          <button type="button" className="link" onClick={() => onText(SAMPLE_TEXT)}>
-            Use sample text
-          </button>
-        </span>
-      </div>
-      <input
-        ref={fileInput}
-        type="file"
-        accept={IMPORT_ACCEPT}
-        className="visually-hidden"
-        tabIndex={-1}
-        aria-label="Import a text or Markdown file"
-        onChange={(event) => {
-          void importFile(event.target.files?.[0]);
-          event.target.value = ""; // allow re-importing the same file
-        }}
-      />
-      {importError && (
-        <p role="alert" className="error">
-          {importError}
-        </p>
-      )}
-      {tooLong && (
-        <p role="alert" className="error">
-          That is {(length - max).toLocaleString()} characters over the limit. Trim the text or split it
-          into parts.
-        </p>
-      )}
-
-      <VoicePicker api={api} voices={voices} value={voiceId} onChange={props.onVoice} />
-
-      <NarrationSettings
-        models={models}
-        modelId={props.modelId}
-        onModel={props.onModel}
-        custom={props.custom}
-        onCustom={props.onCustom}
-        settings={props.tuned}
-        onSettings={props.onTuned}
-      />
-
-      {!empty && !tooLong && <EstimateLine estimate={estimate} minutes={minutes} />}
-
-      {notice && (
-        <p role={notice.kind === "error" ? "alert" : "status"} className={notice.kind}>
-          {notice.message}
-        </p>
-      )}
-
-      <button type="submit" className="primary" disabled={empty || tooLong || !voiceId}>
-        Generate audio
-      </button>
+        </div>
+      </aside>
     </form>
   );
 }

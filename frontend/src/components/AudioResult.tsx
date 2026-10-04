@@ -61,20 +61,48 @@ export function AudioResult({ api, job, audioUrl, extension, cacheEnabled, onRes
     }
   };
 
-  return (
-    <section className="card" aria-labelledby="result-title">
-      <h2 id="result-title">Your audio is ready</h2>
-      <audio ref={audio} controls src={audioUrl} aria-label="Narrated audio" />
+  const hasTranscript = words !== null && words.length > 0;
 
-      <div className="row between">
-        <p className="muted small">
-          {job.char_count.toLocaleString()} characters
-          {duration ? ` · about ${duration}` : ""} · {sections} section{sections === 1 ? "" : "s"}
-          {job.cached_chunks > 0 &&
-            ` · ${job.cached_chunks} reused, ${job.billed_characters.toLocaleString()} characters billed`}
-        </p>
+  return (
+    <section className={hasTranscript ? "workspace" : "workspace single"} aria-labelledby="result-title">
+      {hasTranscript && (
+        <div className="panel reader">
+          <div className="panel-head">
+            <h3>Read along</h3>
+            <span className="muted small">Click any word to jump there</span>
+          </div>
+          <ReadAlong words={words} time={time} onSeek={seek} />
+        </div>
+      )}
+
+      <aside className="panel sidebar">
+        <h2 id="result-title">Your audio is ready</h2>
+        <audio ref={audio} controls src={audioUrl} aria-label="Narrated audio" />
+
+        <dl className="stats">
+          <div>
+            <dt>Length</dt>
+            <dd>{duration ? `about ${duration}` : "unknown"}</dd>
+          </div>
+          <div>
+            <dt>Characters</dt>
+            <dd>{job.char_count.toLocaleString()}</dd>
+          </div>
+          <div>
+            <dt>Sections</dt>
+            <dd>
+              {sections}
+              {job.cached_chunks > 0 && <span className="muted"> ({job.cached_chunks} reused)</span>}
+            </dd>
+          </div>
+          <div>
+            <dt>Billed</dt>
+            <dd>{job.billed_characters.toLocaleString()} chars</dd>
+          </div>
+        </dl>
+
         <label className="inline small">
-          Speed{" "}
+          Playback speed
           <select value={rate} onChange={(event) => setRate(Number(event.target.value))}>
             {SPEEDS.map((speed) => (
               <option key={speed} value={speed}>
@@ -83,43 +111,36 @@ export function AudioResult({ api, job, audioUrl, extension, cacheEnabled, onRes
             ))}
           </select>
         </label>
-      </div>
 
-      {words && words.length > 0 && (
-        <>
-          <h3 className="small-heading">Read along</h3>
-          <ReadAlong words={words} time={time} onSeek={seek} />
-        </>
-      )}
-
-      <div className="row">
-        <a className="button primary" href={audioUrl} download={`chaptercast.${extension}`}>
-          Download .{extension}
-        </a>
-        {job.captions && (
-          <>
-            <button type="button" onClick={() => void saveCaptions("srt")}>
-              Captions .srt
-            </button>
-            <button type="button" onClick={() => void saveCaptions("vtt")}>
-              Captions .vtt
-            </button>
-          </>
-        )}
-        <button type="button" onClick={onReset}>
-          Start over
-        </button>
-      </div>
-      {notice && (
-        <p role="alert" className="error small">
-          {notice}
-        </p>
-      )}
-      <p className="muted small">
-        Audio is deleted from the server when you start over, or after an hour.
-        {cacheEnabled &&
-          " Individual sections stay cached for up to a day, so re-generating an edited chapter only pays for what changed."}
-      </p>
+        <div className="sidebar-foot">
+          <a className="button primary block" href={audioUrl} download={`chaptercast.${extension}`}>
+            Download .{extension}
+          </a>
+          {job.captions && (
+            <div className="row tight">
+              <button type="button" className="grow" onClick={() => void saveCaptions("srt")}>
+                Captions .srt
+              </button>
+              <button type="button" className="grow" onClick={() => void saveCaptions("vtt")}>
+                Captions .vtt
+              </button>
+            </div>
+          )}
+          <button type="button" className="ghost block" onClick={onReset}>
+            Start over
+          </button>
+          {notice && (
+            <p role="alert" className="error small">
+              {notice}
+            </p>
+          )}
+          <p className="muted small">
+            Audio is deleted from the server when you start over, or after an hour.
+            {cacheEnabled &&
+              " Sections stay cached for up to a day, so re-generating an edited chapter only pays for what changed."}
+          </p>
+        </div>
+      </aside>
     </section>
   );
 }
