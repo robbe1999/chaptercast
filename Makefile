@@ -35,7 +35,7 @@ typecheck:  ## Strict type checks
 	cd backend && . .venv/bin/activate && mypy
 	cd frontend && npm run typecheck
 
-scan:  ## Scan the working tree for committed secrets
+scan:  ## Scan every file git could commit for secrets (ignored files like .env are skipped)
 	python3 scripts/scan_secrets.py
 
 openapi:  ## Regenerate docs/openapi.json after an API change
