@@ -77,7 +77,6 @@ export function VoicePicker({ api, voices, value, onChange }: Props) {
           {voices.map((v) => (
             <option key={v.voice_id} value={v.voice_id}>
               {v.name}
-              {v.category ? ` (${v.category})` : ""}
             </option>
           ))}
         </select>
