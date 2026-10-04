@@ -23,7 +23,7 @@ Everything from the browser is untrusted. The key exists only inside the API pro
 
 | # | Threat | Control | Verified by |
 |---|---|---|---|
-| 1 | Key committed to git | `.env` and key files gitignored; `.env.example` holds blanks; local scanner; gitleaks over full history; pre-commit hooks | `test_repository_contains_no_secrets`, `test_env_example_has_no_real_values`, CI `secrets` job |
+| 1 | Key committed to git | `.env` and key files gitignored; `.env.example` holds blanks; local scanner over every file git could commit (tracked plus untracked, not ignored); pinned, checksum-verified gitleaks over the full history in CI; pre-commit hooks | `test_repository_contains_no_secrets`, `test_scanner_checks_what_could_be_committed_not_ignored_files`, `test_env_example_has_no_real_values`, CI `secrets` job |
 | 2 | Key shipped to the browser | No `VITE_`-style variables; frontend only calls its own origin; CI greps the built bundle for credential strings | CI `frontend` job; `client.test.ts` |
 | 3 | Key leaked via logs or errors | `SecretStr`; JSON logger redacts known secrets and key-shaped strings on the final serialised line, including tracebacks; pydantic `hide_input_in_errors`; public error messages are separate from log detail | `test_logging_redaction.py`, `test_secrets_never_appear_in_any_response_or_log`, `test_secrets_never_appear_in_repr_or_dump` |
 | 4 | Key sent to an attacker's host (bad config, redirect) | Base URL must be `https` on `elevenlabs.io`; redirects never followed | `test_provider_base_url_must_be_an_https_elevenlabs_host`, `test_redirects_are_never_followed` |
@@ -58,7 +58,7 @@ Everything from the browser is untrusted. The key exists only inside the API pro
 1. Revoke it in the ElevenLabs dashboard immediately, then create a new one.
 2. Remove it from git history (`git filter-repo`) and force-push. Removing it in a later commit is not enough, and the key must still be treated as burned.
 3. Check usage for the exposure window.
-4. Run `make scan` and confirm gitleaks is clean before re-deploying.
+4. Run `make scan` and `gitleaks git --redact .` (the same full-history scan CI runs) and confirm both are clean before re-deploying.
 
 ## Deployment checklist
 
