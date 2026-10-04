@@ -18,7 +18,7 @@ export function AccessGate({ onSubmit, error, busy }: Props) {
   };
 
   return (
-    <form className="card" onSubmit={submit} aria-labelledby="gate-title">
+    <form className="panel narrow" onSubmit={submit} aria-labelledby="gate-title">
       <h2 id="gate-title">Access required</h2>
       <p className="muted">
         This server is protected. Enter the access token you were given. It stays in this browser tab
