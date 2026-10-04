@@ -36,8 +36,7 @@ export function VoicePicker({ api, voices, value, onChange }: Props) {
     setPreview({ state: "idle" });
   }, []);
 
-  useEffect(() => stop, [stop]);
-  useEffect(() => stop(), [value, stop]); // switching voice stops the old sample
+  useEffect(() => stop, [stop]); // unmounting stops playback
 
   const play = async () => {
     if (!voice?.preview_url) return;
@@ -71,7 +70,10 @@ export function VoicePicker({ api, voices, value, onChange }: Props) {
         <select
           id="voice"
           value={value}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => {
+            stop(); // switching voice stops the old sample
+            onChange(event.target.value);
+          }}
           aria-describedby={description ? "voice-description" : undefined}
         >
           {voices.map((v) => (
