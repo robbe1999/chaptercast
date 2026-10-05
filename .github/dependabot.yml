@@ -18,7 +18,16 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # The workflows share actions, so separate PRs would conflict with each other.
+      github-actions:
+        patterns: ["*"]
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Node is pinned to the current LTS line (CI uses the same); move to the
+      # next LTS deliberately rather than to every new major.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]

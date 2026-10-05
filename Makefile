@@ -2,7 +2,7 @@
 
 # The backend needs Python >= 3.11. macOS ships 3.9 as `python3`, so prefer an
 # explicit newer interpreter. Override with `make setup PYTHON=/path/to/python`.
-PYTHON ?= $(shell command -v python3.13 || command -v python3.12 || command -v python3.11 || echo python3)
+PYTHON ?= $(shell command -v python3.14 || command -v python3.13 || command -v python3.12 || command -v python3.11 || echo python3)
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
