@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- 1. Build the frontend -------------------------------------------------
-FROM node:22-alpine AS web
+FROM node:24-alpine AS web
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -9,7 +9,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # ---- 2. Runtime ------------------------------------------------------------
-FROM python:3.11-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

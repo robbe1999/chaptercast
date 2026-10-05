@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -372,7 +373,20 @@ def test_api_docs_are_off_by_default(make_client: ClientFactory) -> None:
 def test_api_docs_can_be_enabled(make_client: ClientFactory) -> None:
     client = make_client(enable_docs=True)
     assert client.get("/openapi.json").status_code == 200
-    assert "cdn.jsdelivr.net" in client.get("/docs").headers["content-security-policy"]
+    # Only the docs page may load Swagger UI from its CDN; the app's own pages may not.
+    # Exact directive values, so nothing else can ever slip into either policy.
+    assert script_src(client.get("/docs")) == [
+        "'self'",
+        "'unsafe-inline'",
+        "https://cdn.jsdelivr.net",
+    ]
+    assert script_src(client.get("/")) == ["'self'"]
+
+
+def script_src(response: httpx.Response) -> list[str]:
+    policy = response.headers["content-security-policy"]
+    directives = {d.split()[0]: d.split()[1:] for d in policy.split(";") if d.strip()}
+    return directives["script-src"]
 
 
 def test_no_cors_headers_by_default(make_client: ClientFactory) -> None:

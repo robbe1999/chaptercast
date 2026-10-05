@@ -14,10 +14,7 @@ export function useEstimate(api: Api, input: JobInput | null, delayMs = 400): Es
   const key = input ? JSON.stringify(input) : null;
 
   useEffect(() => {
-    if (key === null) {
-      setEstimate(null);
-      return;
-    }
+    if (key === null) return; // nothing to estimate; the hook returns null below
     const request = JSON.parse(key) as JobInput;
     const controller = new AbortController();
     const timer = setTimeout(() => {

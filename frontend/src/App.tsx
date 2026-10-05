@@ -36,7 +36,7 @@ export function settingsFor(custom: boolean, tuned: TunedSettings, model: Model 
 
 export default function App({ api: injected, pollIntervalMs, estimateDelayMs }: AppProps) {
   const api = useMemo(() => injected ?? createApi(), [injected]);
-  const prefs = useMemo(loadPrefs, []);
+  const [prefs] = useState(loadPrefs); // read once, on first render
   const [boot, setBoot] = useState<Boot>({ stage: "loading" });
   const [text, setText] = useState("");
   const [voiceId, setVoiceId] = useState(prefs.voiceId ?? "");
@@ -88,6 +88,9 @@ export default function App({ api: injected, pollIntervalMs, estimateDelayMs }: 
 
   useEffect(() => {
     const controller = new AbortController();
+    // Fetch on mount: load() only sets state after awaiting the network, which is
+    // what effects are for. The rule cannot see past the call, hence the opt-out.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load(controller.signal);
     return () => controller.abort();
   }, [load]);
