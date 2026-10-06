@@ -26,7 +26,7 @@ import logging
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -116,6 +116,18 @@ class Job:
     words: list[Word] | None = field(default=None, repr=False)
     finished_at: float | None = None
     task: asyncio.Task[None] | None = field(default=None, repr=False)
+
+
+def _clamped(words: list[Word] | None, duration: float | None) -> list[Word] | None:
+    """Keep word timings inside the audio.
+
+    On the live API, v4 alignments end about 80 ms after the decoded audio does
+    (docs/MODELS.md), which would make the last caption outlast the sound.
+    """
+    if not words or not duration:
+        return words
+    limit = round(duration, 3)
+    return [replace(w, start=min(w.start, limit), end=min(w.end, limit)) for w in words]
 
 
 def _first_leaf(group: BaseExceptionGroup[Exception]) -> BaseException:
@@ -349,7 +361,7 @@ class JobManager:
                 )
                 job.audio_format = fmt
                 job.duration_seconds = estimate_duration_seconds(data, fmt)
-                job.words = self._transcript(plan, clips)
+                job.words = _clamped(self._transcript(plan, clips), job.duration_seconds)
                 self._finish(job, JobStatus.SUCCEEDED)
                 log.info(
                     "job succeeded",

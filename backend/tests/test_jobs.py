@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -16,7 +18,7 @@ from chaptercast.errors import (
 from chaptercast.guards import DailyBudget
 from chaptercast.jobs import Job, JobManager, JobRequest, JobStatus
 from chaptercast.models import ELEVENLABS_MODELS, ModelSpec
-from chaptercast.providers.base import ProviderRejectedError, VoiceSettings
+from chaptercast.providers.base import AudioClip, ProviderRejectedError, VoiceSettings
 from chaptercast.storage import AudioStore
 from tests.conftest import (
     FAKE_CLIP_SECONDS,
@@ -510,3 +512,20 @@ async def test_a_failed_v4_job_refunds_its_unused_reservation(tmp_path: Path) ->
     assert job.status is JobStatus.FAILED
     assert 0 < job.billed_chars < job.char_count  # some chunks were paid for, not all
     assert env.budget.remaining == 10_000 - job.billed_chars
+
+
+async def test_word_timings_never_run_past_the_audio(tmp_path: Path) -> None:
+    """The live API's v4 alignment ends ~80 ms after the audio; timings are clamped."""
+
+    class Overshooting(FakeProvider):
+        async def synthesize(self, text: str, voice_id: str, **kwargs: Any) -> AudioClip:
+            clip = await super().synthesize(text, voice_id, **kwargs)
+            assert clip.alignment is not None
+            late = tuple(e + 0.08 for e in clip.alignment.ends)
+            return replace(clip, alignment=replace(clip.alignment, ends=late))
+
+    env = Env(tmp_path, Overshooting())
+    job = await env.finish(await env.manager.submit(req()))
+    assert job.words is not None and job.duration_seconds is not None
+    assert max(w.end for w in job.words) <= round(job.duration_seconds, 3)
+    assert all(w.start <= w.end for w in job.words)
