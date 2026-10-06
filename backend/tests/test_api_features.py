@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from typing import Any
 
 import pytest
+import respx
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
-from chaptercast.providers.base import Model, ProviderAuthError
+from chaptercast.models import ELEVENLABS_MODELS, ModelSpec
+from chaptercast.providers.base import ProviderAuthError
+from chaptercast.providers.elevenlabs import ElevenLabsProvider
 from tests.conftest import SENTINEL_KEY, FakeProvider, wait_for_job
 
 ClientFactory = Callable[..., TestClient]
@@ -25,22 +30,35 @@ def finished(client: TestClient, payload: dict[str, Any] | None = None) -> dict[
 class ElevenLikeProvider(FakeProvider):
     """A fake that advertises real ElevenLabs model ids, to exercise the allowlist."""
 
-    async def list_models(self) -> list[Model]:
-        return [
-            Model("eleven_v3", "Eleven v3", None, 1.0, False),
-            Model("eleven_flash_v2_5", "Flash v2.5", None, 0.5, False),
-            Model("eleven_multilingual_v2", "Multilingual v2", None, 1.0, True),
-        ]
+    async def list_models(self) -> list[ModelSpec]:
+        ids = ("eleven_v4", "eleven_flash_v2_5", "eleven_multilingual_v2")
+        return [ELEVENLABS_MODELS[i] for i in ids]
 
 
 # ------------------------------------------------------------------------ models
 def test_models_list_the_providers_models_with_costs(make_client: ClientFactory) -> None:
     body = make_client().get("/api/models").json()
     assert body["default_model_id"] == "model1"
-    assert [(m["model_id"], m["cost_multiplier"], m["supports_style"]) for m in body["models"]] == [
-        ("model1", 1.0, True),
-        ("cheap", 0.5, False),
+    rows = [
+        (m["model_id"], m["cost_multiplier"], m["latency_class"], m["capabilities"]["audio_tags"])
+        for m in body["models"]
     ]
+    assert rows == [
+        ("model1", 1.0, "standard", False),
+        ("cheap", 0.5, "low", False),
+        ("tagger", 1.0, "standard", True),
+    ]
+    first = body["models"][0]
+    assert first["label"] == "Model1"
+    assert first["max_chars_per_request"] == 10_000
+    assert first["capabilities"] == {
+        "timestamps": True,
+        "context_stitching": True,
+        "style": True,
+        "speaker_boost": True,
+        "audio_tags": False,
+        "ssml_breaks": False,
+    }
 
 
 def test_elevenlabs_models_are_limited_to_the_allowlist(make_client: ClientFactory) -> None:
@@ -64,7 +82,7 @@ def test_elevenlabs_models_are_limited_to_the_allowlist(make_client: ClientFacto
 
 def test_model_list_failures_map_to_gateway_errors(make_client: ClientFactory) -> None:
     class Broken(FakeProvider):
-        async def list_models(self) -> list[Model]:
+        async def list_models(self) -> list[ModelSpec]:
             raise ProviderAuthError("bad key")
 
     response = make_client(Broken()).get("/api/models")
@@ -74,7 +92,7 @@ def test_model_list_failures_map_to_gateway_errors(make_client: ClientFactory) -
 
 def test_no_models_is_a_clear_503(make_client: ClientFactory) -> None:
     class Empty(FakeProvider):
-        async def list_models(self) -> list[Model]:
+        async def list_models(self) -> list[ModelSpec]:
             return []
 
     response = make_client(Empty()).post("/api/estimate", json=JOB)
@@ -233,11 +251,15 @@ def test_audio_without_timings_has_no_transcript(make_client: ClientFactory) -> 
     client = make_client(FakeProvider(with_alignment=False))
     done = finished(client)
     assert done["status"] == "succeeded"
+    assert done["word_timings"] is False
     assert done["transcript_url"] is None
     assert done["captions"] is None
-    response = client.get(f"/api/jobs/{done['id']}/transcript")
-    assert response.status_code == 404
-    assert response.json()["error"]["code"] == "no_transcript"
+    for path in ("transcript", "captions.srt", "captions.vtt"):
+        response = client.get(f"/api/jobs/{done['id']}/{path}")
+        assert response.status_code == 409
+        error = response.json()["error"]
+        assert error["code"] == "no_word_timings"
+        assert "no word timings" in error["message"]
 
 
 def test_unknown_caption_formats_are_404(make_client: ClientFactory) -> None:
@@ -245,3 +267,57 @@ def test_unknown_caption_formats_are_404(make_client: ClientFactory) -> None:
     done = finished(client)
     assert client.get(f"/api/jobs/{done['id']}/captions.txt").status_code == 404
     assert client.get(f"/api/jobs/{'0' * 32}/captions.srt").status_code == 404
+
+
+# ------------------------------------------------------------ model capabilities
+def test_speaker_boost_is_kept_only_for_models_that_support_it(make_client: ClientFactory) -> None:
+    provider = FakeProvider()
+    client = make_client(provider)
+    for model_id, expected in (("model1", True), ("cheap", None)):
+        provider.calls.clear()
+        finished(
+            client, {**JOB, "model_id": model_id, "voice_settings": {"use_speaker_boost": True}}
+        )
+        assert {c["voice_settings"].use_speaker_boost for c in provider.calls} == {expected}
+
+
+def test_the_estimate_says_when_tags_will_be_ignored(make_client: ClientFactory) -> None:
+    client = make_client()
+    tagged = {**JOB, "text": "[warm] It was quiet."}
+    ignored = client.post("/api/estimate", json={**tagged, "model_id": "model1"}).json()
+    assert ignored["tags_ignored"] is True
+    assert ignored["characters"] == len("It was quiet.")  # removed before counting
+    kept = client.post("/api/estimate", json={**tagged, "model_id": "tagger"}).json()
+    assert kept["tags_ignored"] is False
+    assert kept["characters"] == len("[warm] It was quiet.")  # tags are billed
+
+
+def test_v4_estimates_use_the_registry_price(make_client: ClientFactory) -> None:
+    client = make_client(ElevenLikeProvider(), elevenlabs_api_key=SENTINEL_KEY)
+    for model_id, multiplier in (("eleven_v4", 1.0), ("eleven_flash_v2_5", 0.5)):
+        body = client.post("/api/estimate", json={**JOB, "model_id": model_id}).json()
+        assert body["cost_multiplier"] == multiplier
+        assert body["estimated_credits"] == math.ceil(body["billable_characters"] * multiplier)
+
+
+def test_a_v4_upstream_failure_never_leaks_the_key(
+    make_client: ClientFactory, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """End to end through the real ElevenLabs client, with the key planted upstream."""
+    with respx.mock(assert_all_called=False) as mock:
+        mock.get("https://api.elevenlabs.io/v1/models").respond(
+            200, json=[{"model_id": "eleven_v4", "can_do_text_to_speech": True}]
+        )
+        mock.post(url__regex=r"/v1/text-to-speech/.*").respond(
+            400,
+            json={"detail": {"status": "model_not_found", "message": f"bad key {SENTINEL_KEY}"}},
+            headers={"x-echo": f"Bearer {SENTINEL_KEY}"},
+        )
+        provider = ElevenLabsProvider(SecretStr(SENTINEL_KEY), max_retries=0)
+        client = make_client(provider, elevenlabs_api_key=SENTINEL_KEY)
+        created = client.post("/api/jobs", json={**JOB, "model_id": "eleven_v4"})
+        done = wait_for_job(client, created.json()["id"])
+    assert done["status"] == "failed"
+    assert done["error"]["message"] == "The selected model is not available for this account."
+    for blob in (created.text, str(done), capsys.readouterr().out):
+        assert SENTINEL_KEY not in blob

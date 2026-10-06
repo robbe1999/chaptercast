@@ -18,8 +18,8 @@ from chaptercast.errors import (
     TextTooLongError,
 )
 from chaptercast.jobs import Job, JobRequest, JobStatus
+from chaptercast.models import ModelSpec
 from chaptercast.providers.base import (
-    Model,
     ProviderAuthError,
     ProviderError,
     ProviderQuotaError,
@@ -38,6 +38,7 @@ from chaptercast.schemas import (
     JobError,
     JobProgress,
     JobResponse,
+    ModelCapabilities,
     ModelResponse,
     ModelsResponse,
     TranscriptResponse,
@@ -82,6 +83,7 @@ def _to_response(job: Job) -> JobResponse:
         created_at=job.created_at,
         duration_seconds=job.duration_seconds,
         audio_url=f"{base}/audio" if done else None,
+        word_timings=has_transcript,
         transcript_url=f"{base}/transcript" if has_transcript else None,
         captions=(
             CaptionLinks(srt=f"{base}/captions.srt", vtt=f"{base}/captions.vtt")
@@ -115,12 +117,11 @@ def _limit(container: Container, request: Request) -> None:
         )  # fmt: skip
 
 
-async def _catalog(container: Container) -> tuple[list[Model], Model]:
+async def _catalog(container: Container) -> tuple[list[ModelSpec], ModelSpec]:
     """The models users may choose from, and the default.
 
-    For ElevenLabs this is the live model list intersected with the operator's
-    allowlist: only models known to support context stitching and timestamps,
-    and only what the operator is willing to pay for.
+    For ElevenLabs this is the registered models the live API offers, intersected
+    with the operator's allowlist: only what the operator is willing to pay for.
     """
     try:
         models = await container.provider.list_models()
@@ -139,7 +140,7 @@ async def _catalog(container: Container) -> tuple[list[Model], Model]:
     return models, default
 
 
-async def _resolve(container: Container, payload: CreateJobRequest) -> tuple[JobRequest, Model]:
+async def _resolve(container: Container, payload: CreateJobRequest) -> tuple[JobRequest, ModelSpec]:
     models, default = await _catalog(container)
     model = default
     if payload.model_id is not None:
@@ -151,11 +152,15 @@ async def _resolve(container: Container, payload: CreateJobRequest) -> tuple[Job
     settings = VoiceSettings(
         stability=body.stability if body else None,
         similarity_boost=body.similarity_boost if body else None,
-        # Dropped where unsupported, so it cannot change the cache key for nothing.
+        # Settings the model cannot use are dropped, so they never reach the provider
+        # or change the cache key for nothing.
         style=body.style if body and model.supports_style else None,
         speed=body.speed if body else None,
+        use_speaker_boost=(
+            body.use_speaker_boost if body and model.supports_speaker_boost else None
+        ),
     )
-    return JobRequest(payload.text, payload.voice_id, model.model_id, settings), model
+    return JobRequest(payload.text, payload.voice_id, model, settings), model
 
 
 @router.get("/config", response_model=ConfigResponse, summary="Public client configuration")
@@ -240,10 +245,19 @@ async def list_models(request: Request) -> ModelsResponse:
         models=[
             ModelResponse(
                 model_id=m.model_id,
-                name=m.name,
+                label=m.label,
                 description=m.description,
                 cost_multiplier=m.cost_multiplier,
-                supports_style=m.supports_style,
+                max_chars_per_request=m.max_chars_per_request,
+                latency_class=m.latency_class,
+                capabilities=ModelCapabilities(
+                    timestamps=m.supports_timestamps,
+                    context_stitching=m.supports_context_stitching,
+                    style=m.supports_style,
+                    speaker_boost=m.supports_speaker_boost,
+                    audio_tags=m.supports_audio_tags,
+                    ssml_breaks=m.ssml_breaks,
+                ),
             )
             for m in models
         ],
@@ -273,6 +287,7 @@ async def estimate(payload: EstimateRequest, request: Request) -> EstimateRespon
         max_chars_per_job=limit,
         within_limit=plan.char_count <= limit,
         daily_budget_remaining=container.budget.remaining,
+        tags_ignored=plan.tags_ignored,
     )
 
 
@@ -370,7 +385,11 @@ def _words_or_error(job: Job) -> list[Word]:
     if job.status is not JobStatus.SUCCEEDED:
         raise ApiError(409, "not_ready", "The audio is not ready.")
     if not job.words:
-        raise ApiError(404, "no_transcript", "No timings are available for this audio.")
+        raise ApiError(
+            409, "no_word_timings",
+            "This audio has no word timings (the model did not return them), "
+            "so there is no read-along or captions for it.",
+        )  # fmt: skip
     return job.words
 
 

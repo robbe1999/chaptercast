@@ -13,6 +13,7 @@ const JOB = {
   created_at: "2026-10-01T10:00:00Z",
   duration_seconds: null,
   audio_url: null,
+  word_timings: false,
   transcript_url: null,
   captions: null,
   error: null,
@@ -144,6 +145,7 @@ describe("createApi", () => {
     const estimate = {
       characters: 3, chunks: 1, cached_chunks: 0, billable_characters: 3, cost_multiplier: 1,
       estimated_credits: 3, max_chars_per_job: 10, within_limit: true, daily_budget_remaining: 9,
+      tags_ignored: false,
     };
     const fetchImpl = vi.fn(async () => reply(estimate));
     const result = await createApi({ fetchImpl, tokenStore: memoryStore() }).estimate({ text: "Hi.", voiceId: "v1" });

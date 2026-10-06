@@ -10,6 +10,7 @@ import pytest
 import respx
 from pydantic import SecretStr
 
+from chaptercast.models import ELEVENLABS_MODELS
 from chaptercast.providers.base import (
     ProviderAuthError,
     ProviderQuotaError,
@@ -310,43 +311,33 @@ async def test_default_voice_settings_are_not_sent(
 
 
 # ---------------------------------------------------------------------- models
-async def test_models_are_filtered_validated_and_cached(
-    provider: ElevenLabsProvider, respx_mock: respx.MockRouter
+async def test_models_are_registry_specs_for_what_the_api_offers(
+    provider: ElevenLabsProvider, respx_mock: respx.MockRouter, caplog: pytest.LogCaptureFixture
 ) -> None:
     route = respx_mock.get(f"{BASE}/v1/models").respond(
         200,
         json=[
             {
-                "model_id": "eleven_multilingual_v2",
-                "name": "Multilingual v2",
+                "model_id": "eleven_v4",
                 "can_do_text_to_speech": True,
-                "can_use_style": True,
                 "model_rates": {"character_cost_multiplier": 1.0},
             },
             {
-                "model_id": "eleven_flash_v2_5",
-                "name": "Flash v2.5",
+                # Price drift: logged, but the registry stays the source of truth.
+                "model_id": "eleven_v4_turbo",
                 "can_do_text_to_speech": True,
-                "model_rates": {"character_cost_multiplier": 0.5},
+                "model_rates": {"character_cost_multiplier": 0.75},
             },
-            {"model_id": "eleven_sts", "can_do_text_to_speech": False},
+            {"model_id": "eleven_multilingual_v2", "can_do_text_to_speech": False},
+            {"model_id": "eleven_v3", "can_do_text_to_speech": True},  # not registered
             {"model_id": "../evil", "can_do_text_to_speech": True},
-            {
-                "model_id": "weird_rates",
-                "can_do_text_to_speech": True,
-                "model_rates": {"character_cost_multiplier": "lots"},
-            },
         ],
     )
-    models = await provider.list_models()
-    assert [m.model_id for m in models] == [
-        "eleven_multilingual_v2",
-        "eleven_flash_v2_5",
-        "weird_rates",
-    ]
-    assert models[0].supports_style and not models[1].supports_style
+    with caplog.at_level("WARNING"):
+        models = await provider.list_models()
+    assert models == [ELEVENLABS_MODELS["eleven_v4"], ELEVENLABS_MODELS["eleven_v4_turbo"]]
     assert models[1].cost_multiplier == 0.5
-    assert models[2].cost_multiplier == 1.0  # nonsense rates fall back to full price
+    assert [r.message for r in caplog.records] == ["model price differs from the registry"]
 
     assert await provider.list_models() == models
     assert route.call_count == 1
@@ -458,3 +449,97 @@ async def test_preview_for_an_unknown_voice_is_none(
 )
 def test_preview_audio_is_identified_by_its_bytes(data: bytes, expected: str | None) -> None:
     assert _sniff_audio(data) == expected
+
+
+# --------------------------------------------------------------------- Eleven v4
+@pytest.mark.parametrize("model_id", ["eleven_v4", "eleven_v4_turbo"])
+async def test_v4_models_use_the_documented_request(
+    provider: ElevenLabsProvider, respx_mock: respx.MockRouter, model_id: str
+) -> None:
+    text = "[warm] Quiet."
+    route = respx_mock.post(TTS).respond(200, json=tts_payload(b"MP3", text))
+    clip = await provider.synthesize(
+        text,
+        "voice1",
+        model_id=model_id,
+        voice_settings=VoiceSettings(stability=0.4, speed=1.1),
+        previous_text="Before.",
+        next_text="After.",
+    )
+    request = route.calls.last.request
+    assert request.url.path == "/v1/text-to-speech/voice1/with-timestamps"
+    assert request.url.params["output_format"] == "mp3_44100_128"
+    assert request.headers["xi-api-key"] == SENTINEL_KEY
+    assert json.loads(request.content) == {
+        "text": text,  # tags travel as plain text
+        "model_id": model_id,
+        "voice_settings": {"stability": 0.4, "speed": 1.1},
+        "previous_text": "Before.",
+        "next_text": "After.",
+    }
+    assert clip.alignment is not None and "".join(clip.alignment.characters) == text
+
+
+async def test_without_timestamps_the_plain_endpoint_is_used(
+    provider: ElevenLabsProvider, respx_mock: respx.MockRouter
+) -> None:
+    timed = respx_mock.post(TTS).respond(200, json=tts_payload(b"x"))
+    plain = respx_mock.post(f"{BASE}/v1/text-to-speech/voice1").respond(
+        200, content=b"MP3DATA", headers={"content-type": "audio/mpeg"}
+    )
+    clip = await provider.synthesize("Hi.", "voice1", model_id="eleven_v4", with_timestamps=False)
+    assert clip.data == b"MP3DATA" and clip.alignment is None
+    assert plain.calls.last.request.headers["accept"] == "audio/mpeg"
+    assert json.loads(plain.calls.last.request.content)["model_id"] == "eleven_v4"
+    assert not timed.called
+
+
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [(200, b"<html>"), (200, b"")],
+)
+async def test_the_plain_endpoint_rejects_non_audio_and_empty_bodies(
+    provider: ElevenLabsProvider, respx_mock: respx.MockRouter, status: int, body: bytes
+) -> None:
+    content_type = "text/html" if body else "audio/mpeg"
+    respx_mock.post(f"{BASE}/v1/text-to-speech/voice1").respond(
+        status, content=body, headers={"content-type": content_type}
+    )
+    with pytest.raises(ProviderUnavailableError):
+        await provider.synthesize("Hi.", "voice1", with_timestamps=False)
+
+
+# Error bodies in the shape the live API returned on 2026-10-06, with the key planted
+# inside them to prove it can never travel to a user or a log line.
+@pytest.mark.parametrize(
+    ("status", "detail", "message"),
+    [
+        (
+            404,
+            {"type": "not_found", "code": "voice_not_found", "status": "voice_not_found",
+             "message": f"A voice with voice_id 'x' was not found. key={SENTINEL_KEY}"},
+            "The selected voice is not available for this account.",
+        ),
+        (
+            400,
+            {"status": "model_not_found",
+             "message": f"A model with model ID eleven_v4 does not exist. {SENTINEL_KEY}"},
+            "The selected model is not available for this account.",
+        ),
+    ],
+)  # fmt: skip
+async def test_v4_rejections_are_not_retried_and_read_clearly(
+    provider: ElevenLabsProvider,
+    respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+    status: int,
+    detail: dict[str, str],
+    message: str,
+) -> None:
+    route = respx_mock.post(TTS).respond(status, json={"detail": detail})
+    with caplog.at_level("DEBUG"), pytest.raises(ProviderRejectedError) as info:
+        await provider.synthesize("Hi.", "voice1", model_id="eleven_v4")
+    assert route.call_count == 1
+    assert info.value.public_message == message
+    assert SENTINEL_KEY not in info.value.public_message
+    assert SENTINEL_KEY not in caplog.text

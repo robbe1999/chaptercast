@@ -30,8 +30,14 @@ interface AppProps {
 /** The voice settings to send: none unless the user opted in, and no style where unsupported. */
 export function settingsFor(custom: boolean, tuned: TunedSettings, model: Model | undefined): VoiceSettings | undefined {
   if (!custom) return undefined;
-  const { style, ...rest } = tuned;
-  return model?.supports_style ? { ...rest, style } : rest;
+  const { style, use_speaker_boost, ...rest } = tuned;
+  const caps = model?.capabilities;
+  return {
+    ...rest,
+    ...(caps?.style ? { style } : {}),
+    // Speaker boost is on by default upstream, so it is only sent to turn it off.
+    ...(caps?.speaker_boost && !use_speaker_boost ? { use_speaker_boost: false } : {}),
+  };
 }
 
 export default function App({ api: injected, pollIntervalMs, estimateDelayMs }: AppProps) {
