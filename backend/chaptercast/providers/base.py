@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from chaptercast.audio import AudioFormat
+from chaptercast.models import ModelSpec
 
 VOICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -33,16 +34,6 @@ class Voice:
 
 
 @dataclass(frozen=True)
-class Model:
-    model_id: str
-    name: str
-    description: str | None = None
-    # Credits charged per character, relative to the standard models (Flash/Turbo are 0.5).
-    cost_multiplier: float = 1.0
-    supports_style: bool = False
-
-
-@dataclass(frozen=True)
 class VoiceSettings:
     """Per-request voice tuning. ``None`` means "use the voice's stored default"."""
 
@@ -50,8 +41,9 @@ class VoiceSettings:
     similarity_boost: float | None = None
     style: float | None = None
     speed: float | None = None
+    use_speaker_boost: bool | None = None
 
-    def as_payload(self) -> dict[str, float]:
+    def as_payload(self) -> dict[str, float | bool]:
         return {k: v for k, v in self.__dict__.items() if v is not None}
 
     def is_default(self) -> bool:
@@ -149,7 +141,9 @@ class TTSProvider(Protocol):
 
     async def list_voices(self) -> list[Voice]: ...
 
-    async def list_models(self) -> list[Model]: ...
+    async def list_models(self) -> list[ModelSpec]:
+        """The registered models this provider can actually serve right now."""
+        ...
 
     async def voice_preview(self, voice_id: str) -> Preview | None: ...
 
@@ -162,6 +156,7 @@ class TTSProvider(Protocol):
         voice_settings: VoiceSettings | None = None,
         previous_text: str | None = None,
         next_text: str | None = None,
+        with_timestamps: bool = True,
     ) -> AudioClip: ...
 
     async def aclose(self) -> None: ...

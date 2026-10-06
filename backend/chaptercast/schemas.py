@@ -23,6 +23,9 @@ class VoiceSettingsBody(BaseModel):
         default=None, ge=0, le=1, description="Style exaggeration (models that support it)."
     )
     speed: float | None = Field(default=None, ge=0.7, le=1.2, description="Speaking rate.")
+    use_speaker_boost: bool | None = Field(
+        default=None, description="Boost similarity to the speaker (models that support it)."
+    )
 
 
 class CreateJobRequest(BaseModel):
@@ -56,6 +59,9 @@ class EstimateResponse(BaseModel):
     max_chars_per_job: int
     within_limit: bool
     daily_budget_remaining: int
+    tags_ignored: bool = Field(
+        description="The text has tags the chosen model would read aloud, so they are removed."
+    )
 
 
 class JobProgress(BaseModel):
@@ -85,6 +91,9 @@ class JobResponse(BaseModel):
     created_at: datetime
     duration_seconds: float | None
     audio_url: str | None
+    word_timings: bool = Field(
+        description="Whether the model returned word timings (read-along and captions)."
+    )
     transcript_url: str | None
     captions: CaptionLinks | None
     error: JobError | None
@@ -111,12 +120,23 @@ class VoiceResponse(BaseModel):
     preview_url: str | None
 
 
+class ModelCapabilities(BaseModel):
+    timestamps: bool = Field(description="Word timings for the read-along and captions.")
+    context_stitching: bool = Field(description="Uses neighbouring text for continuity.")
+    style: bool
+    speaker_boost: bool
+    audio_tags: bool = Field(description="Understands expression tags such as [warm].")
+    ssml_breaks: bool
+
+
 class ModelResponse(BaseModel):
     model_id: str
-    name: str
-    description: str | None
-    cost_multiplier: float
-    supports_style: bool
+    label: str
+    description: str
+    cost_multiplier: float = Field(description="Credits per character.")
+    max_chars_per_request: int
+    latency_class: Literal["standard", "low"]
+    capabilities: ModelCapabilities
 
 
 class ModelsResponse(BaseModel):

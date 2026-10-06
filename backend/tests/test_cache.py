@@ -162,3 +162,7 @@ def test_a_zero_size_cache_is_disabled(tmp_path: Path, clock: Clock) -> None:
     assert cache.size_bytes() == 0
     cache.clear()
     assert not (tmp_path / "off").exists()
+
+
+def test_v4_and_v4_turbo_never_share_cached_audio() -> None:
+    assert request(model_id="eleven_v4").key() != request(model_id="eleven_v4_turbo").key()

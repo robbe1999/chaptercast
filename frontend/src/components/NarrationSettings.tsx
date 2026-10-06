@@ -8,6 +8,7 @@ export const DEFAULT_SETTINGS: TunedSettings = {
   similarity_boost: 0.75,
   style: 0,
   speed: 1,
+  use_speaker_boost: true,
 };
 
 interface Props {
@@ -50,7 +51,7 @@ export function NarrationSettings({
         >
           {models.map((m) => (
             <option key={m.model_id} value={m.model_id}>
-              {m.name}
+              {m.label}
               {costLabel(m)}
             </option>
           ))}
@@ -98,8 +99,8 @@ export function NarrationSettings({
             step={0.05}
             value={settings.style}
             onChange={set("style")}
-            disabled={!model?.supports_style}
-            note={model?.supports_style ? undefined : "Not supported by this model."}
+            disabled={!model?.capabilities.style}
+            note={model?.capabilities.style ? undefined : "Not supported by this model."}
           />
           <Slider
             id="speed"

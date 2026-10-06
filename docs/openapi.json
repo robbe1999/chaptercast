@@ -220,6 +220,11 @@
             "title": "Max Chars Per Job",
             "type": "integer"
           },
+          "tags_ignored": {
+            "description": "The text has tags the chosen model would read aloud, so they are removed.",
+            "title": "Tags Ignored",
+            "type": "boolean"
+          },
           "within_limit": {
             "title": "Within Limit",
             "type": "boolean"
@@ -234,7 +239,8 @@
           "estimated_credits",
           "max_chars_per_job",
           "within_limit",
-          "daily_budget_remaining"
+          "daily_budget_remaining",
+          "tags_ignored"
         ],
         "title": "EstimateResponse",
         "type": "object"
@@ -387,6 +393,11 @@
           "voice_id": {
             "title": "Voice Id",
             "type": "string"
+          },
+          "word_timings": {
+            "description": "Whether the model returned word timings (read-along and captions).",
+            "title": "Word Timings",
+            "type": "boolean"
           }
         },
         "required": [
@@ -401,6 +412,7 @@
           "created_at",
           "duration_seconds",
           "audio_url",
+          "word_timings",
           "transcript_url",
           "captions",
           "error"
@@ -408,42 +420,90 @@
         "title": "JobResponse",
         "type": "object"
       },
-      "ModelResponse": {
+      "ModelCapabilities": {
         "properties": {
-          "cost_multiplier": {
-            "title": "Cost Multiplier",
-            "type": "number"
+          "audio_tags": {
+            "description": "Understands expression tags such as [warm].",
+            "title": "Audio Tags",
+            "type": "boolean"
           },
-          "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Description"
+          "context_stitching": {
+            "description": "Uses neighbouring text for continuity.",
+            "title": "Context Stitching",
+            "type": "boolean"
           },
-          "model_id": {
-            "title": "Model Id",
-            "type": "string"
+          "speaker_boost": {
+            "title": "Speaker Boost",
+            "type": "boolean"
           },
-          "name": {
-            "title": "Name",
-            "type": "string"
+          "ssml_breaks": {
+            "title": "Ssml Breaks",
+            "type": "boolean"
           },
-          "supports_style": {
-            "title": "Supports Style",
+          "style": {
+            "title": "Style",
+            "type": "boolean"
+          },
+          "timestamps": {
+            "description": "Word timings for the read-along and captions.",
+            "title": "Timestamps",
             "type": "boolean"
           }
         },
         "required": [
+          "timestamps",
+          "context_stitching",
+          "style",
+          "speaker_boost",
+          "audio_tags",
+          "ssml_breaks"
+        ],
+        "title": "ModelCapabilities",
+        "type": "object"
+      },
+      "ModelResponse": {
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/ModelCapabilities"
+          },
+          "cost_multiplier": {
+            "description": "Credits per character.",
+            "title": "Cost Multiplier",
+            "type": "number"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "latency_class": {
+            "enum": [
+              "standard",
+              "low"
+            ],
+            "title": "Latency Class",
+            "type": "string"
+          },
+          "max_chars_per_request": {
+            "title": "Max Chars Per Request",
+            "type": "integer"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          }
+        },
+        "required": [
           "model_id",
-          "name",
+          "label",
           "description",
           "cost_multiplier",
-          "supports_style"
+          "max_chars_per_request",
+          "latency_class",
+          "capabilities"
         ],
         "title": "ModelResponse",
         "type": "object"
@@ -696,6 +756,18 @@
             ],
             "description": "Style exaggeration (models that support it).",
             "title": "Style"
+          },
+          "use_speaker_boost": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Boost similarity to the speaker (models that support it).",
+            "title": "Use Speaker Boost"
           }
         },
         "title": "VoiceSettingsBody",

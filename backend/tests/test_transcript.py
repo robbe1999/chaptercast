@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from typing import Any
+
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -133,3 +137,43 @@ def test_empty_inputs() -> None:
     assert build_cues([]) == []
     assert to_webvtt([]) == "WEBVTT\n"
     assert to_srt([]) == ""
+
+
+# ---------------------------------------------------- real alignments (recorded)
+_RECORDINGS = json.loads(
+    (Path(__file__).parent / "fixtures" / "elevenlabs_alignments.json").read_text()
+)["recordings"]
+
+
+def _recorded(model_id: str, text: str) -> dict[str, Any]:
+    return next(r for r in _RECORDINGS if r["model_id"] == model_id and r["text"] == text)
+
+
+def _alignment(raw: dict[str, Any]) -> Alignment:
+    return Alignment(
+        tuple(raw["characters"]),
+        tuple(raw["character_start_times_seconds"]),
+        tuple(raw["character_end_times_seconds"]),
+    )
+
+
+@pytest.mark.parametrize("model_id", ["eleven_v4", "eleven_v4_turbo"])
+def test_a_real_v4_tag_is_not_a_spoken_word(model_id: str) -> None:
+    rec = _recorded(model_id, "[warm] Quiet.")
+    alignment = _alignment(rec["alignment"])
+    (word,) = build_words([Segment(alignment, rec["audio_seconds_ffprobe"])])
+    assert word.text == "Quiet."
+    # The word keeps the timing the API gave its first letter, after the tag's.
+    assert word.start == pytest.approx(alignment.starts[alignment.characters.index("Q")])
+    for caption in (to_srt(build_cues([word])), to_webvtt(build_cues([word]))):
+        assert "warm" not in caption and "[" not in caption
+
+
+@pytest.mark.parametrize("model_id", ["eleven_v4", "eleven_v4_turbo", "eleven_multilingual_v2"])
+def test_real_alignments_give_every_word_in_order(model_id: str) -> None:
+    rec = _recorded(model_id, "The lamp was lit. The sea was calm tonight.")
+    words = build_words([Segment(_alignment(rec["alignment"]), rec["audio_seconds_ffprobe"])])
+    assert [w.text for w in words] == rec["text"].split()
+    assert [w.start for w in words] == sorted(w.start for w in words)
+    # Measured on the live API: v4 runs up to 80 ms past the decoded audio, v2 matches it.
+    assert words[-1].end <= rec["audio_seconds_ffprobe"] + 0.1

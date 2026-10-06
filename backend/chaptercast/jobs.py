@@ -42,8 +42,10 @@ from chaptercast.errors import (
     TextTooLongError,
 )
 from chaptercast.guards import DailyBudget
+from chaptercast.models import ModelSpec
 from chaptercast.providers.base import AudioClip, ProviderError, TTSProvider, VoiceSettings
 from chaptercast.storage import AudioStore
+from chaptercast.tags import has_tags, strip_tags
 from chaptercast.transcript import Segment, Word, build_words
 
 log = logging.getLogger(__name__)
@@ -66,7 +68,7 @@ TERMINAL = frozenset({JobStatus.SUCCEEDED, JobStatus.FAILED, JobStatus.CANCELLED
 class JobRequest:
     text: str
     voice_id: str
-    model_id: str
+    model: ModelSpec
     voice_settings: VoiceSettings = field(default_factory=VoiceSettings)
 
 
@@ -77,6 +79,8 @@ class Plan:
     chunks: list[Chunk]
     requests: list[ClipRequest]
     cached: list[bool]
+    # The text had expression tags but the model would read them aloud, so they were removed.
+    tags_ignored: bool = False
 
     @property
     def char_count(self) -> int:
@@ -150,26 +154,39 @@ class JobManager:
         return sum(1 for j in self._jobs.values() if j.status not in TERMINAL)
 
     def plan(self, request: JobRequest) -> Plan:
-        """Chunk the text and check the cache. Pure lookup: no spend, no provider call."""
-        chunks = split_chunks(request.text, self._settings.chunk_max_chars)
+        """Chunk the text and check the cache. Pure lookup: no spend, no provider call.
+
+        The model's capabilities shape the plan: tags are removed for models that
+        would read them aloud, and neighbouring context is only sent (and only part
+        of the cache key) when the model supports it, so editing one section of a
+        context-less model never invalidates its neighbours.
+        """
+        model = request.model
+        tags_ignored = not model.supports_audio_tags and has_tags(request.text)
+        text = request.text if model.supports_audio_tags else strip_tags(request.text)
+        max_chars = min(self._settings.chunk_max_chars, model.max_chars_per_request)
+        chunks = split_chunks(text, max_chars)
+        stitch = model.supports_context_stitching
         fmt = self._provider.output_format
         format_name = f"{fmt.extension}_{fmt.bitrate_kbps or 0}"
         requests = [
             ClipRequest(
                 provider=self._provider.name,
                 output_format=format_name,
-                model_id=request.model_id,
+                model_id=model.model_id,
                 voice_id=request.voice_id,
                 voice_settings=request.voice_settings,
                 text=chunk.text,
-                previous_text=chunks[i - 1].text[-_CONTEXT_CHARS:] if i > 0 else None,
-                next_text=chunks[i + 1].text[:_CONTEXT_CHARS] if i + 1 < len(chunks) else None,
+                previous_text=chunks[i - 1].text[-_CONTEXT_CHARS:] if stitch and i > 0 else None,
+                next_text=(
+                    chunks[i + 1].text[:_CONTEXT_CHARS] if stitch and i + 1 < len(chunks) else None
+                ),
             )
             for i, chunk in enumerate(chunks)
         ]
         cache = self._cache
         cached = [cache is not None and cache.contains(r.key()) for r in requests]
-        return Plan(chunks, requests, cached)
+        return Plan(chunks, requests, cached, tags_ignored)
 
     # ----------------------------------------------------------------- commands
     async def submit(self, request: JobRequest) -> Job:
@@ -187,7 +204,7 @@ class JobManager:
         job = Job(
             id=uuid.uuid4().hex,
             voice_id=request.voice_id,
-            model_id=request.model_id,
+            model_id=request.model.model_id,
             char_count=plan.char_count,
             total_chunks=len(plan.chunks),
             created_at=datetime.now(UTC),
@@ -202,7 +219,7 @@ class JobManager:
                 "chunks": len(plan.chunks),
                 "chars": plan.char_count,
                 "cached_chunks": plan.cached_chunks,
-                "model_id": request.model_id,
+                "model_id": request.model.model_id,
             },
         )
         return job
@@ -295,10 +312,11 @@ class JobManager:
                 clip = await self._provider.synthesize(
                     clip_request.text,
                     request.voice_id,
-                    model_id=request.model_id,
+                    model_id=request.model.model_id,
                     voice_settings=request.voice_settings,
                     previous_text=clip_request.previous_text,
                     next_text=clip_request.next_text,
+                    with_timestamps=request.model.supports_timestamps,
                 )
             job.billed_chars += chars
             if cache is not None:
