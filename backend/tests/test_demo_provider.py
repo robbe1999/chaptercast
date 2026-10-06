@@ -111,7 +111,9 @@ async def test_demo_models_and_previews() -> None:
     assert {m.model_id: m.cost_multiplier for m in models} == {
         "demo_standard": 1.0,
         "demo_fast": 0.5,
+        "demo_expressive": 1.0,
     }
+    assert [m.model_id for m in models if m.supports_audio_tags] == ["demo_expressive"]
     preview = await provider.voice_preview("demo-lyra")
     assert preview is not None and preview.data[:4] == b"RIFF"
     assert preview.content_type == "audio/wav"

@@ -17,6 +17,8 @@ from urllib.parse import urlparse
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from chaptercast.models import ELEVENLABS_MODELS
+
 ProviderName = Literal["elevenlabs", "demo"]
 
 _ALLOWED_PROVIDER_SUFFIX = "elevenlabs.io"
@@ -44,9 +46,12 @@ class Settings(BaseSettings):
     # Restricted to MP3 so duration can be derived from the CBR bitrate.
     elevenlabs_output_format: str = Field(default="mp3_44100_128", pattern=r"^mp3_\d{4,5}_\d{2,3}$")
     # Models users may pick (comma separated). The default model is always allowed.
-    # Each must support text-to-speech, previous/next-text context and timestamps.
+    # Every id must be in the model registry (chaptercast/models.py); that is checked
+    # at startup, so a typo fails at boot rather than on the first request.
     allowed_models: str = Field(
-        default="eleven_multilingual_v2,eleven_flash_v2_5,eleven_turbo_v2_5",
+        default=(
+            "eleven_multilingual_v2,eleven_flash_v2_5,eleven_turbo_v2_5,eleven_v4,eleven_v4_turbo"
+        ),
         pattern=r"^[a-z0-9_]{1,64}(,[a-z0-9_]{1,64})*$",
     )
     tts_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
@@ -119,6 +124,16 @@ class Settings(BaseSettings):
         if "*" in value:
             raise ValueError("Wildcard CORS origins are not allowed")
         return value.strip()
+
+    @model_validator(mode="after")
+    def _models_are_registered(self) -> Settings:
+        unknown = [m for m in self.allowed_model_ids if m not in ELEVENLABS_MODELS]
+        if unknown:
+            raise ValueError(
+                f"Unknown model ids in CHAPTERCAST_ALLOWED_MODELS or the default model: "
+                f"{', '.join(unknown)}. Register them in chaptercast/models.py first."
+            )
+        return self
 
     @model_validator(mode="after")
     def _provider_has_what_it_needs(self) -> Settings:

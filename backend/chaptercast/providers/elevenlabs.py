@@ -24,7 +24,6 @@ import base64
 import binascii
 import logging
 import random
-import re
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
@@ -35,10 +34,10 @@ import httpx
 from pydantic import SecretStr
 
 from chaptercast.audio import AudioFormat, mp3_format
+from chaptercast.models import ELEVENLABS_MODELS, ModelSpec
 from chaptercast.providers.base import (
     Alignment,
     AudioClip,
-    Model,
     Preview,
     ProviderAuthError,
     ProviderError,
@@ -94,7 +93,7 @@ class ElevenLabsProvider:
         self._rng = rng or random.Random()  # noqa: S311  (jitter, not cryptography)
         self._clock = clock
         self._voices_cache: tuple[float, list[Voice]] | None = None
-        self._models_cache: tuple[float, list[Model]] | None = None
+        self._models_cache: tuple[float, list[ModelSpec]] | None = None
         self._preview_urls: dict[str, str] = {}
         self._previews: OrderedDict[str, Preview] = OrderedDict()
         self._client = httpx.AsyncClient(
@@ -151,29 +150,33 @@ class ElevenLabsProvider:
         self._preview_urls = preview_urls
         return voices
 
-    async def list_models(self) -> list[Model]:
+    async def list_models(self) -> list[ModelSpec]:
+        """Registered models that the live API offers this key for text to speech.
+
+        Capabilities and prices come from the registry, not from this response:
+        the live list only decides availability. A price that no longer matches
+        the registry is logged, so drift is noticed instead of silently mis-quoted.
+        """
         now = self._clock()
         if self._models_cache and now - self._models_cache[0] < _MODELS_CACHE_SECONDS:
             return self._models_cache[1]
         payload = (await self._request("GET", "/v1/models")).json()
-        models: list[Model] = []
+        models: list[ModelSpec] = []
         for item in payload if isinstance(payload, list) else []:
-            model_id = str(item.get("model_id", ""))
-            if not item.get("can_do_text_to_speech") or not _MODEL_ID_RE.fullmatch(model_id):
+            spec = ELEVENLABS_MODELS.get(str(item.get("model_id", "")))
+            if spec is None or not item.get("can_do_text_to_speech"):
                 continue
-            rates = item.get("model_rates") or {}
-            multiplier = rates.get("character_cost_multiplier", 1.0)
-            if not isinstance(multiplier, int | float) or not 0 < multiplier <= 10:
-                multiplier = 1.0
-            models.append(
-                Model(
-                    model_id=model_id,
-                    name=str(item.get("name") or model_id),
-                    description=item.get("description"),
-                    cost_multiplier=float(multiplier),
-                    supports_style=bool(item.get("can_use_style")),
+            live = (item.get("model_rates") or {}).get("character_cost_multiplier")
+            if isinstance(live, int | float) and live != spec.cost_multiplier:
+                log.warning(
+                    "model price differs from the registry",
+                    extra={
+                        "model_id": spec.model_id,
+                        "live": live,
+                        "registry": spec.cost_multiplier,
+                    },
                 )
-            )
+            models.append(spec)
         self._models_cache = (now, models)
         return models
 
@@ -217,6 +220,7 @@ class ElevenLabsProvider:
         voice_settings: VoiceSettings | None = None,
         previous_text: str | None = None,
         next_text: str | None = None,
+        with_timestamps: bool = True,
     ) -> AudioClip:
         if not is_valid_voice_id(voice_id):
             raise ProviderRejectedError("invalid voice id")
@@ -227,6 +231,8 @@ class ElevenLabsProvider:
             body["previous_text"] = previous_text
         if next_text:
             body["next_text"] = next_text
+        if not with_timestamps:
+            return await self._synthesize_plain(voice_id, body)
         response = await self._request(
             "POST",
             f"/v1/text-to-speech/{quote(voice_id, safe='')}/with-timestamps",
@@ -247,6 +253,24 @@ class ElevenLabsProvider:
             raise ProviderUnavailableError("empty audio in response")
         alignment = _parse_alignment(payload.get("alignment"), text)
         return AudioClip(audio, self.output_format, alignment)
+
+    async def _synthesize_plain(self, voice_id: str, body: dict[str, Any]) -> AudioClip:
+        """Audio only, for models without usable timestamps: the clip has no alignment."""
+        response = await self._request(
+            "POST",
+            f"/v1/text-to-speech/{quote(voice_id, safe='')}",
+            params={"output_format": self._output_format_name},
+            json=body,
+            headers={"accept": "audio/mpeg"},
+        )
+        content_type = response.headers.get("content-type", "")
+        if not content_type.startswith("audio/"):
+            raise ProviderUnavailableError(f"unexpected content-type {content_type!r}")
+        if len(response.content) > _MAX_AUDIO_BYTES:
+            raise ProviderRejectedError("audio response too large")
+        if not response.content:
+            raise ProviderUnavailableError("empty audio in response")
+        return AudioClip(response.content, self.output_format)
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -288,7 +312,13 @@ class ElevenLabsProvider:
             return ProviderRateLimitError(text, status_code=status)
         if status >= 500:
             return ProviderUnavailableError(text, status_code=status)
-        return ProviderRejectedError(text, status_code=status)
+        rejected = ProviderRejectedError(text, status_code=status)
+        # Seen on the live API: 404 voice_not_found and 400 model_not_found.
+        if "voice_not_found" in text:
+            rejected.public_message = "The selected voice is not available for this account."
+        elif "model_not_found" in text:
+            rejected.public_message = "The selected model is not available for this account."
+        return rejected
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         for attempt in range(self._max_retries + 1):
@@ -315,9 +345,6 @@ class ElevenLabsProvider:
             server_delay = self._retry_after(response)
             await self._sleep(server_delay if server_delay is not None else self._backoff(attempt))
         raise ProviderUnavailableError("retries exhausted")  # pragma: no cover
-
-
-_MODEL_ID_RE = re.compile(r"^[a-z0-9_]{1,64}$")
 
 
 def _is_allowed_preview_url(url: str) -> bool:

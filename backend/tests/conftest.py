@@ -15,10 +15,10 @@ from fastapi.testclient import TestClient
 from chaptercast.audio import WAV
 from chaptercast.config import Settings
 from chaptercast.main import create_app
+from chaptercast.models import ModelSpec
 from chaptercast.providers.base import (
     Alignment,
     AudioClip,
-    Model,
     Preview,
     TTSProvider,
     Voice,
@@ -71,6 +71,39 @@ def even_alignment(text: str, duration: float) -> Alignment:
     )
 
 
+def fake_model(model_id: str = "model1", **overrides: Any) -> ModelSpec:
+    """A registry-shaped model for tests. Defaults: full price, every capability but tags."""
+    fields: dict[str, Any] = {
+        "model_id": model_id,
+        "label": model_id.replace("_", " ").title(),
+        "description": f"Test model {model_id}",
+        "cost_multiplier": 1.0,
+        "max_chars_per_request": 10_000,
+        "supports_timestamps": True,
+        "supports_context_stitching": True,
+        "supports_style": True,
+        "supports_speaker_boost": True,
+        "supports_audio_tags": False,
+        "ssml_breaks": False,
+    }
+    return ModelSpec(**{**fields, **overrides})
+
+
+FAKE_MODELS = [
+    fake_model("model1"),
+    fake_model(
+        "cheap",
+        cost_multiplier=0.5,
+        supports_style=False,
+        supports_speaker_boost=False,
+        latency_class="low",
+    ),
+    fake_model(
+        "tagger", supports_style=False, supports_speaker_boost=False, supports_audio_tags=True
+    ),
+]
+
+
 class FakeProvider:
     """Deterministic provider. Each clip's samples encode the first character of its text."""
 
@@ -83,10 +116,12 @@ class FakeProvider:
         delay: float | Callable[[str], float] = 0.0,
         fail_when: Callable[[str], Exception | None] | None = None,
         with_alignment: bool = True,
+        models: list[ModelSpec] | None = None,
     ) -> None:
         self.delay = delay
         self.fail_when = fail_when
         self.with_alignment = with_alignment
+        self.models = FAKE_MODELS if models is None else models
         self.calls: list[dict[str, Any]] = []
         self.in_flight = 0
         self.max_in_flight = 0
@@ -97,11 +132,8 @@ class FakeProvider:
             Voice("voice2", "Voice Two", "premade", None),
         ]
 
-    async def list_models(self) -> list[Model]:
-        return [
-            Model("model1", "Model One", "Full price", 1.0, True),
-            Model("cheap", "Cheap Model", "Half price", 0.5, False),
-        ]
+    async def list_models(self) -> list[ModelSpec]:
+        return list(self.models)
 
     async def voice_preview(self, voice_id: str) -> Preview | None:
         return Preview(make_wav(7), "audio/wav") if voice_id == "voice1" else None
@@ -115,6 +147,7 @@ class FakeProvider:
         voice_settings: VoiceSettings | None = None,
         previous_text: str | None = None,
         next_text: str | None = None,
+        with_timestamps: bool = True,
     ) -> AudioClip:
         self.calls.append(
             {
@@ -124,6 +157,7 @@ class FakeProvider:
                 "voice_settings": voice_settings,
                 "previous": previous_text,
                 "next": next_text,
+                "with_timestamps": with_timestamps,
             }
         )
         self.in_flight += 1
@@ -135,7 +169,8 @@ class FakeProvider:
             if self.fail_when is not None and (error := self.fail_when(text)) is not None:
                 raise error
             data = make_wav(ord(text[0]) % 32000, FAKE_CLIP_FRAMES, FAKE_CLIP_RATE)
-            alignment = even_alignment(text, FAKE_CLIP_SECONDS) if self.with_alignment else None
+            timed = self.with_alignment and with_timestamps
+            alignment = even_alignment(text, FAKE_CLIP_SECONDS) if timed else None
             return AudioClip(data, WAV, alignment)
         finally:
             self.in_flight -= 1

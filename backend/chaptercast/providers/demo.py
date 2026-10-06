@@ -19,16 +19,17 @@ import struct
 import wave
 
 from chaptercast.audio import WAV
+from chaptercast.models import DEMO_MODELS, ModelSpec
 from chaptercast.providers.base import (
     Alignment,
     AudioClip,
-    Model,
     Preview,
     ProviderRejectedError,
     Voice,
     VoiceSettings,
     is_valid_voice_id,
 )
+from chaptercast.tags import tag_mask
 
 _SAMPLE_RATE = 22_050
 _MAX_WORDS_PER_CLIP = 2_000
@@ -44,11 +45,6 @@ _VOICES = (
 )
 _BASE_HZ = {"demo-aria": 196.0, "demo-orion": 261.63, "demo-lyra": 392.0}
 
-_MODELS = (
-    Model("demo_standard", "Demo Standard", "Synthetic tones at full price.", 1.0, True),
-    Model("demo_fast", "Demo Fast", "Synthetic tones at half price.", 0.5, False),
-)
-
 
 class DemoProvider:
     name = "demo"
@@ -60,8 +56,8 @@ class DemoProvider:
     async def list_voices(self) -> list[Voice]:
         return list(_VOICES)
 
-    async def list_models(self) -> list[Model]:
-        return list(_MODELS)
+    async def list_models(self) -> list[ModelSpec]:
+        return list(DEMO_MODELS.values())
 
     async def voice_preview(self, voice_id: str) -> Preview | None:
         if voice_id not in _BASE_HZ:
@@ -78,16 +74,17 @@ class DemoProvider:
         voice_settings: VoiceSettings | None = None,
         previous_text: str | None = None,
         next_text: str | None = None,
+        with_timestamps: bool = True,
     ) -> AudioClip:
         if not is_valid_voice_id(voice_id) or voice_id not in _BASE_HZ:
             raise ProviderRejectedError("unknown demo voice")
-        if model_id is not None and model_id not in {m.model_id for m in _MODELS}:
+        if model_id is not None and model_id not in DEMO_MODELS:
             raise ProviderRejectedError("unknown demo model")
         if self._latency:
             await asyncio.sleep(self._latency)
         speed = voice_settings.speed if voice_settings and voice_settings.speed else 1.0
         data, alignment = await asyncio.to_thread(self._render, text, voice_id, speed)
-        return AudioClip(data, WAV, alignment)
+        return AudioClip(data, WAV, alignment if with_timestamps else None)
 
     async def aclose(self) -> None:
         return None
@@ -100,16 +97,20 @@ class DemoProvider:
         starts: list[float] = []
         ends: list[float] = []
         words = 0
+        silent = tag_mask(text)  # expression tags are instructions, not words
+        position = 0
 
         def now() -> float:
             return len(samples) / 2 / _SAMPLE_RATE
 
         for token in _TOKEN_RE.findall(text):
             start = now()
+            in_tag = silent[position]  # tokens are never empty
+            position += len(token)
             if token.isspace():
-                if words:
+                if words and not in_tag:
                     samples += b"\x00\x00" * int(_SAMPLE_RATE * _WORD_GAP_SECONDS / speed)
-            elif words < _MAX_WORDS_PER_CLIP:  # beyond the cap: zero-length, still aligned
+            elif not in_tag and words < _MAX_WORDS_PER_CLIP:  # else zero-length, still aligned
                 words += 1
                 digest = hashlib.sha256(token.lower().encode()).digest()
                 hz = base * 2 ** (_PENTATONIC[digest[0] % len(_PENTATONIC)] / 12)
