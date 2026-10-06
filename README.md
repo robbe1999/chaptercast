@@ -34,6 +34,7 @@ ChapterCast is my hands-on way to learn the ElevenLabs API: a proof of concept, 
 
 ```bash
 git clone https://github.com/robbe1999/chaptercast && cd chaptercast
+nvm use               # Node 24 from .nvmrc (the frontend needs Node 22+)
 make setup            # python venv (needs Python 3.11+) + npm ci
 make dev-api          # terminal 1: API on :8000 (demo mode)
 make dev-web          # terminal 2: UI on http://localhost:5173
