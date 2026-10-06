@@ -20,6 +20,17 @@ type Boot =
   | { stage: "error"; message: string };
 
 const CHARS_PER_SECOND = 15; // typical narration pace, for the length estimate only
+const EXAMPLE_TAGS = ["[warm]", "[whispered]"];
+
+/** Insert ``tag`` over the selection, keeping single spaces around it. */
+export function insertAt(text: string, start: number, end: number, tag: string) {
+  const before = text.slice(0, start);
+  const after = text.slice(end);
+  const lead = before && !/\s$/.test(before) ? " " : "";
+  const trail = /^\s/.test(after) ? "" : " ";
+  const value = `${before}${lead}${tag}${trail}${after}`;
+  return { value, caret: before.length + lead.length + tag.length + trail.length };
+}
 
 interface AppProps {
   api?: Api;
@@ -252,6 +263,8 @@ function Composer(props: ComposerProps) {
   const [importError, setImportError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const textArea = useRef<HTMLTextAreaElement>(null);
+  const model = models.find((m) => m.model_id === props.modelId);
   const max = config.max_chars_per_job;
   const length = text.length;
   const tooLong = length > max;
@@ -271,6 +284,19 @@ function Composer(props: ComposerProps) {
     } catch (error) {
       setImportError(error instanceof ImportError ? error.message : "That file could not be read.");
     }
+  };
+
+  const insertTag = (tag: string) => {
+    const element = textArea.current;
+    const start = element?.selectionStart ?? text.length;
+    const end = element?.selectionEnd ?? start;
+    const { value, caret } = insertAt(text, start, end, tag);
+    onText(value);
+    // After React has applied the new value, put the cursor right after the tag.
+    queueMicrotask(() => {
+      element?.focus();
+      element?.setSelectionRange(caret, caret);
+    });
   };
 
   const drop = (event: DragEvent<HTMLTextAreaElement>) => {
@@ -298,6 +324,7 @@ function Composer(props: ComposerProps) {
           Chapter text
         </label>
         <textarea
+          ref={textArea}
           id="text"
           value={text}
           className={dragging ? "dropping" : undefined}
@@ -330,6 +357,24 @@ function Composer(props: ComposerProps) {
             {length.toLocaleString()} / {max.toLocaleString()} characters
           </span>
         </div>
+        {model?.capabilities.audio_tags && (
+          <div className="tag-hint" role="group" aria-labelledby="tag-hint-label">
+            <span id="tag-hint-label" className="muted small">
+              {model.label} understands expression tags such as [warm] or [whispered]. Insert tag:
+            </span>
+            {EXAMPLE_TAGS.map((tag) => (
+              <button
+                key={tag}
+                type="button"
+                className="chip"
+                aria-label={`Insert ${tag} tag`}
+                onClick={() => insertTag(tag)}
+              >
+                {tag}
+              </button>
+            ))}
+          </div>
+        )}
         {importError && (
           <p role="alert" className="error small">
             {importError}

@@ -78,6 +78,12 @@ export function AudioResult({ api, job, audioUrl, extension, cacheEnabled, onRes
       <aside className="panel sidebar">
         <h2 id="result-title">Your audio is ready</h2>
         <audio ref={audio} controls src={audioUrl} aria-label="Narrated audio" />
+        {!job.word_timings && (
+          <p className="muted small">
+            This model did not return word timings, so there is no read-along or captions for this
+            audio.
+          </p>
+        )}
 
         <dl className="stats">
           <div>

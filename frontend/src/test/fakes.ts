@@ -69,6 +69,53 @@ export const MODELS: Models = {
       latency_class: "low",
       capabilities: { ...ALL_CAPABILITIES, style: false, speaker_boost: false },
     }),
+    makeModel({
+      model_id: "m4",
+      label: "Expressive",
+      description: "Understands tags",
+      capabilities: { ...ALL_CAPABILITIES, style: false, speaker_boost: false, audio_tags: true },
+    }),
+  ],
+};
+
+const NO_STYLE = { ...ALL_CAPABILITIES, style: false, speaker_boost: false };
+
+/** The five registered ElevenLabs models, shaped as GET /api/models returns them. */
+export const FIVE_MODELS: Models = {
+  provider: "elevenlabs",
+  default_model_id: "eleven_multilingual_v2",
+  models: [
+    makeModel({ model_id: "eleven_multilingual_v2", label: "Eleven Multilingual v2", description: "Stable." }),
+    makeModel({
+      model_id: "eleven_flash_v2_5",
+      label: "Eleven Flash v2.5",
+      description: "Fast.",
+      cost_multiplier: 0.5,
+      latency_class: "low",
+      capabilities: NO_STYLE,
+    }),
+    makeModel({
+      model_id: "eleven_turbo_v2_5",
+      label: "Eleven Turbo v2.5",
+      description: "Turbo.",
+      cost_multiplier: 0.5,
+      latency_class: "low",
+      capabilities: NO_STYLE,
+    }),
+    makeModel({
+      model_id: "eleven_v4",
+      label: "Eleven v4",
+      description: "Expressive with audio tags.",
+      capabilities: { ...NO_STYLE, audio_tags: true },
+    }),
+    makeModel({
+      model_id: "eleven_v4_turbo",
+      label: "Eleven v4 Turbo",
+      description: "v4 with audio tags at low latency.",
+      cost_multiplier: 0.5,
+      latency_class: "low",
+      capabilities: { ...NO_STYLE, audio_tags: true },
+    }),
   ],
 };
 
