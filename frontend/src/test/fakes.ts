@@ -1,6 +1,15 @@
 import { vi } from "vitest";
 import { ApiError, type Api } from "../api/client";
-import type { Config, Estimate, Job, Models, Transcript, Voices } from "../api/schemas";
+import type {
+  Capabilities,
+  Config,
+  Estimate,
+  Job,
+  Model,
+  Models,
+  Transcript,
+  Voices,
+} from "../api/schemas";
 
 export const CONFIG: Config = {
   provider: "demo",
@@ -25,12 +34,88 @@ export const VOICES: Voices = {
   ],
 };
 
+export const ALL_CAPABILITIES: Capabilities = {
+  timestamps: true,
+  context_stitching: true,
+  style: true,
+  speaker_boost: true,
+  audio_tags: false,
+  ssml_breaks: false,
+};
+
+export function makeModel(overrides: Partial<Model> = {}): Model {
+  return {
+    model_id: "m1",
+    label: "Standard",
+    description: "Full price",
+    cost_multiplier: 1,
+    max_chars_per_request: 10_000,
+    latency_class: "standard",
+    capabilities: ALL_CAPABILITIES,
+    ...overrides,
+  };
+}
+
 export const MODELS: Models = {
   provider: "demo",
   default_model_id: "m1",
   models: [
-    { model_id: "m1", name: "Standard", description: "Full price", cost_multiplier: 1, supports_style: true },
-    { model_id: "m2", name: "Fast", description: "Half price", cost_multiplier: 0.5, supports_style: false },
+    makeModel({ model_id: "m1", label: "Standard", description: "Full price" }),
+    makeModel({
+      model_id: "m2",
+      label: "Fast",
+      description: "Half price",
+      cost_multiplier: 0.5,
+      latency_class: "low",
+      capabilities: { ...ALL_CAPABILITIES, style: false, speaker_boost: false },
+    }),
+    makeModel({
+      model_id: "m4",
+      label: "Expressive",
+      description: "Understands tags",
+      capabilities: { ...ALL_CAPABILITIES, style: false, speaker_boost: false, audio_tags: true },
+    }),
+  ],
+};
+
+const NO_STYLE = { ...ALL_CAPABILITIES, style: false, speaker_boost: false };
+
+/** The five registered ElevenLabs models, shaped as GET /api/models returns them. */
+export const FIVE_MODELS: Models = {
+  provider: "elevenlabs",
+  default_model_id: "eleven_multilingual_v2",
+  models: [
+    makeModel({ model_id: "eleven_multilingual_v2", label: "Eleven Multilingual v2", description: "Stable." }),
+    makeModel({
+      model_id: "eleven_flash_v2_5",
+      label: "Eleven Flash v2.5",
+      description: "Fast.",
+      cost_multiplier: 0.5,
+      latency_class: "low",
+      capabilities: NO_STYLE,
+    }),
+    makeModel({
+      model_id: "eleven_turbo_v2_5",
+      label: "Eleven Turbo v2.5",
+      description: "Turbo.",
+      cost_multiplier: 0.5,
+      latency_class: "low",
+      capabilities: NO_STYLE,
+    }),
+    makeModel({
+      model_id: "eleven_v4",
+      label: "Eleven v4",
+      description: "Expressive with audio tags.",
+      capabilities: { ...NO_STYLE, audio_tags: true },
+    }),
+    makeModel({
+      model_id: "eleven_v4_turbo",
+      label: "Eleven v4 Turbo",
+      description: "v4 with audio tags at low latency.",
+      cost_multiplier: 0.5,
+      latency_class: "low",
+      capabilities: { ...NO_STYLE, audio_tags: true },
+    }),
   ],
 };
 
@@ -45,6 +130,7 @@ export function makeEstimate(overrides: Partial<Estimate> = {}): Estimate {
     max_chars_per_job: 200,
     within_limit: true,
     daily_budget_remaining: 25_000,
+    tags_ignored: false,
     ...overrides,
   };
 }
@@ -72,6 +158,7 @@ export function makeJob(overrides: Partial<Job> = {}): Job {
     created_at: "2026-10-01T10:00:00Z",
     duration_seconds: null,
     audio_url: null,
+    word_timings: false,
     transcript_url: null,
     captions: null,
     error: null,
@@ -117,6 +204,7 @@ export const SUCCEEDED = (id = "a".repeat(32)) =>
     duration_seconds: 75,
     billed_characters: 40,
     audio_url: `/api/jobs/${id}/audio`,
+    word_timings: true,
     transcript_url: `/api/jobs/${id}/transcript`,
     captions: { srt: `/api/jobs/${id}/captions.srt`, vtt: `/api/jobs/${id}/captions.vtt` },
   });

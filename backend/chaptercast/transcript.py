@@ -6,6 +6,11 @@ playback order, shift every timing by the duration of the audio before it, and
 group characters into words. Captions are then cut from the word list,
 preferring sentence ends, with the usual readability limits (two lines of at
 most 42 characters, at most ~6 seconds on screen).
+
+Expression tags such as ``[warm]`` come back in the alignment as characters with
+short timings before the first spoken word (seen on the live API). They are
+instructions, not speech, so they are treated like whitespace: they never become
+words in the read-along or the captions, and the real words keep their timings.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from chaptercast.providers.base import Alignment
+from chaptercast.tags import tag_mask
 
 _SENTENCE_END = (".", "!", "?", "…", '."', '!"', '?"', ".”", "!”", "?”")
 _LINE_CHARS = 42
@@ -56,8 +62,12 @@ def build_words(segments: Sequence[Segment]) -> list[Word]:
         current: list[str] = []
         start = end = 0.0
         a = segment.alignment
-        for char, char_start, char_end in zip(a.characters, a.starts, a.ends, strict=True):
-            if char.isspace():
+        single = all(len(c) == 1 for c in a.characters)  # what the live API returns
+        in_tag = tag_mask("".join(a.characters)) if single else [False] * len(a.characters)
+        for index, (char, char_start, char_end) in enumerate(
+            zip(a.characters, a.starts, a.ends, strict=True)
+        ):
+            if char.isspace() or in_tag[index]:
                 if current:
                     words.append(Word("".join(current), round(start, 3), round(end, 3), paragraph))
                     current = []

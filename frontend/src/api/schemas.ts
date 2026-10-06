@@ -28,12 +28,25 @@ export const VoicesSchema = z.object({
   voices: z.array(VoiceSchema),
 });
 
+// Unknown keys are dropped rather than rejected (zod's default), so the server can add
+// a capability without breaking older clients.
+export const CapabilitiesSchema = z.object({
+  timestamps: z.boolean(),
+  context_stitching: z.boolean(),
+  style: z.boolean(),
+  speaker_boost: z.boolean(),
+  audio_tags: z.boolean(),
+  ssml_breaks: z.boolean(),
+});
+
 export const ModelSchema = z.object({
   model_id: z.string(),
-  name: z.string(),
-  description: z.string().nullable(),
+  label: z.string(),
+  description: z.string(),
   cost_multiplier: z.number().positive(),
-  supports_style: z.boolean(),
+  max_chars_per_request: z.number().int().positive(),
+  latency_class: z.string(), // "standard" | "low"; kept open for future classes
+  capabilities: CapabilitiesSchema,
 });
 
 export const ModelsSchema = z.object({
@@ -52,6 +65,7 @@ export const EstimateSchema = z.object({
   max_chars_per_job: z.number().int(),
   within_limit: z.boolean(),
   daily_budget_remaining: z.number().int(),
+  tags_ignored: z.boolean(),
 });
 
 export const TranscriptWordSchema = z.object({
@@ -83,6 +97,7 @@ export const JobSchema = z.object({
   created_at: z.string(),
   duration_seconds: z.number().nullable(),
   audio_url: z.string().nullable(),
+  word_timings: z.boolean(),
   transcript_url: z.string().nullable(),
   captions: z.object({ srt: z.string(), vtt: z.string() }).nullable(),
   error: z.object({ code: z.string(), message: z.string() }).nullable(),
@@ -102,6 +117,7 @@ export type Voice = z.infer<typeof VoiceSchema>;
 export type Voices = z.infer<typeof VoicesSchema>;
 export type Job = z.infer<typeof JobSchema>;
 export type Model = z.infer<typeof ModelSchema>;
+export type Capabilities = z.infer<typeof CapabilitiesSchema>;
 export type Models = z.infer<typeof ModelsSchema>;
 export type Estimate = z.infer<typeof EstimateSchema>;
 export type TranscriptWord = z.infer<typeof TranscriptWordSchema>;
@@ -113,6 +129,7 @@ export interface VoiceSettings {
   similarity_boost?: number;
   style?: number;
   speed?: number;
+  use_speaker_boost?: boolean;
 }
 
 export interface JobInput {

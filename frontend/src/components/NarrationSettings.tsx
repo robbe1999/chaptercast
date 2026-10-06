@@ -8,6 +8,7 @@ export const DEFAULT_SETTINGS: TunedSettings = {
   similarity_boost: 0.75,
   style: 0,
   speed: 1,
+  use_speaker_boost: true,
 };
 
 interface Props {
@@ -21,8 +22,22 @@ interface Props {
 }
 
 export function costLabel(model: Model): string {
-  return model.cost_multiplier === 1 ? "" : ` · ${model.cost_multiplier}× credits`;
+  return ` · ${model.cost_multiplier.toFixed(1)}x credits`;
 }
+
+/** Short, human labels for what makes a model different. */
+export function capabilityBadges(model: Model): string[] {
+  const badges: string[] = [];
+  if (model.capabilities.audio_tags) badges.push("Audio tags");
+  if (model.latency_class === "low") badges.push("Low latency");
+  if (!model.capabilities.timestamps) badges.push("No word timings");
+  return badges;
+}
+
+const unsupported = (model: Model | undefined, what: string) =>
+  `${model?.label ?? "This model"} does not support ${what}.`;
+
+type NumericSetting = Exclude<keyof TunedSettings, "use_speaker_boost">;
 
 export function NarrationSettings({
   models,
@@ -34,7 +49,10 @@ export function NarrationSettings({
   onSettings,
 }: Props) {
   const model = models.find((m) => m.model_id === modelId) ?? models[0];
-  const set = (key: keyof TunedSettings) => (value: number) => onSettings({ ...settings, [key]: value });
+  const set = (key: NumericSetting) => (value: number) => onSettings({ ...settings, [key]: value });
+  const badges = model ? capabilityBadges(model) : [];
+  const canStyle = Boolean(model?.capabilities.style);
+  const canBoost = Boolean(model?.capabilities.speaker_boost);
 
   return (
     <fieldset className="settings">
@@ -50,7 +68,7 @@ export function NarrationSettings({
         >
           {models.map((m) => (
             <option key={m.model_id} value={m.model_id}>
-              {m.name}
+              {m.label}
               {costLabel(m)}
             </option>
           ))}
@@ -59,6 +77,13 @@ export function NarrationSettings({
           <p id="model-description" className="muted small">
             {model.description}
           </p>
+        )}
+        {badges.length > 0 && (
+          <ul className="badges" aria-label="Model capabilities">
+            {badges.map((badge) => (
+              <li key={badge}>{badge}</li>
+            ))}
+          </ul>
         )}
       </div>
 
@@ -98,8 +123,9 @@ export function NarrationSettings({
             step={0.05}
             value={settings.style}
             onChange={set("style")}
-            disabled={!model?.supports_style}
-            note={model?.supports_style ? undefined : "Not supported by this model."}
+            disabled={!canStyle}
+            note={canStyle ? undefined : "Not supported by this model."}
+            title={canStyle ? undefined : unsupported(model, "style exaggeration")}
           />
           <Slider
             id="speed"
@@ -112,6 +138,15 @@ export function NarrationSettings({
             onChange={set("speed")}
             format={(v) => `${v.toFixed(2)}×`}
           />
+          <label className="check" title={canBoost ? undefined : unsupported(model, "speaker boost")}>
+            <input
+              type="checkbox"
+              checked={canBoost && settings.use_speaker_boost}
+              disabled={!canBoost}
+              onChange={(event) => onSettings({ ...settings, use_speaker_boost: event.target.checked })}
+            />
+            Speaker boost
+          </label>
           <button type="button" className="link" onClick={() => onSettings(DEFAULT_SETTINGS)}>
             Reset to defaults
           </button>
@@ -132,16 +167,17 @@ interface SliderProps {
   onChange: (value: number) => void;
   disabled?: boolean;
   note?: string;
+  title?: string;
   format?: (value: number) => string;
 }
 
-function Slider({ id, label, hint, min, max, step, value, onChange, disabled, note, format }: SliderProps) {
+function Slider({ id, label, hint, min, max, step, value, onChange, disabled, note, title, format }: SliderProps) {
   const shown = format ? format(value) : value.toFixed(2);
   return (
-    <div className="slider">
+    <div className="slider" title={title}>
       <div className="slider-head">
         <label htmlFor={id}>{label}</label>
-        <output htmlFor={id}>{disabled ? "—" : shown}</output>
+        <output htmlFor={id}>{disabled ? "n/a" : shown}</output>
       </div>
       <input
         id={id}

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -15,18 +17,29 @@ from chaptercast.errors import (
 )
 from chaptercast.guards import DailyBudget
 from chaptercast.jobs import Job, JobManager, JobRequest, JobStatus
-from chaptercast.providers.base import ProviderRejectedError, VoiceSettings
+from chaptercast.models import ELEVENLABS_MODELS, ModelSpec
+from chaptercast.providers.base import AudioClip, ProviderRejectedError, VoiceSettings
 from chaptercast.storage import AudioStore
-from tests.conftest import FAKE_CLIP_SECONDS, FakeProvider, make_settings, read_wav_values
+from tests.conftest import (
+    FAKE_CLIP_SECONDS,
+    FAKE_MODELS,
+    FakeProvider,
+    fake_model,
+    make_settings,
+    read_wav_values,
+)
 
 # Distinct first letters per sentence let us verify output ordering from the audio itself.
 STORY = " ".join(f"{letter}" + "x" * 38 + "." for letter in "ABCDEFGH")
 
 
+MODELS = {m.model_id: m for m in FAKE_MODELS}
+
+
 def req(
     text: str = STORY, *, model_id: str = "model1", settings: VoiceSettings | None = None
 ) -> JobRequest:
-    return JobRequest(text, "voice1", model_id, settings or VoiceSettings())
+    return JobRequest(text, "voice1", MODELS[model_id], settings or VoiceSettings())
 
 
 class Env:
@@ -372,3 +385,147 @@ async def test_no_transcript_without_alignment(tmp_path: Path) -> None:
     job = await env.finish(await env.manager.submit(req()))
     assert job.status is JobStatus.SUCCEEDED
     assert job.words is None
+
+
+# ------------------------------------------------------------- model capabilities
+NO_STITCHING = fake_model("solo", supports_context_stitching=False)
+NO_TIMESTAMPS = fake_model("untimed", supports_timestamps=False)
+TAGGER = MODELS["tagger"]
+
+
+def req_for(model: ModelSpec, text: str = STORY) -> JobRequest:
+    return JobRequest(text, "voice1", model, VoiceSettings())
+
+
+async def test_a_model_without_stitching_gets_no_context(tmp_path: Path) -> None:
+    provider = FakeProvider()
+    env = Env(tmp_path, provider)
+    await env.finish(await env.manager.submit(req_for(NO_STITCHING)))
+    assert provider.calls
+    assert all(c["previous"] is None and c["next"] is None for c in provider.calls)
+
+
+async def test_without_stitching_an_edit_only_regenerates_the_edited_chunk(
+    tmp_path: Path,
+) -> None:
+    """No context in the request means no context in the cache key either."""
+    provider = FakeProvider()
+    env = Env(tmp_path, provider, cache=True)
+    await env.finish(await env.manager.submit(req_for(NO_STITCHING)))
+    edited = STORY.replace("D" + "x" * 38 + ".", "D" + "y" * 38 + ".")
+    provider.calls.clear()
+    job = await env.finish(await env.manager.submit(req_for(NO_STITCHING, edited)))
+    assert [c["text"][0] for c in provider.calls] == ["D"]  # neighbours C and E stay cached
+    assert job.cached_chunks == job.total_chunks - 1
+
+
+async def test_a_model_without_timestamps_falls_back_to_plain_audio(tmp_path: Path) -> None:
+    provider = FakeProvider()
+    env = Env(tmp_path, provider)
+    job = await env.finish(await env.manager.submit(req_for(NO_TIMESTAMPS)))
+    assert job.status is JobStatus.SUCCEEDED
+    assert {c["with_timestamps"] for c in provider.calls} == {False}
+    assert job.words is None  # no read-along rather than a wrong one
+    assert job.audio_path is not None and job.audio_path.exists()
+
+
+async def test_models_with_timestamps_ask_for_them(tmp_path: Path) -> None:
+    provider = FakeProvider()
+    env = Env(tmp_path, provider)
+    await env.finish(await env.manager.submit(req()))
+    assert {c["with_timestamps"] for c in provider.calls} == {True}
+
+
+async def test_chunks_respect_the_models_own_request_limit(tmp_path: Path) -> None:
+    small = fake_model("small", max_chars_per_request=45)
+    env = Env(tmp_path, FakeProvider(), chunk_max_chars=900)
+    plan = env.manager.plan(req_for(small))
+    assert plan.chunks and all(len(c.text) <= 45 for c in plan.chunks)
+
+
+# ---------------------------------------------------------------- expression tags
+TAGGED = "[warm] It was a quiet morning. [whispered] Nobody else was awake."
+
+
+async def test_tags_are_removed_for_models_that_would_read_them(tmp_path: Path) -> None:
+    provider = FakeProvider()
+    env = Env(tmp_path, provider)
+    plan = env.manager.plan(req(TAGGED))
+    assert plan.tags_ignored
+    assert [c.text for c in plan.chunks] == ["It was a quiet morning. Nobody else was awake."]
+    await env.finish(await env.manager.submit(req(TAGGED)))
+    assert all("[" not in c["text"] for c in provider.calls)
+
+
+async def test_stripped_tags_do_not_change_the_cache_key(tmp_path: Path) -> None:
+    env = Env(tmp_path, FakeProvider())
+    plain = "It was a quiet morning. Nobody else was awake."
+    assert [r.key() for r in env.manager.plan(req(TAGGED)).requests] == [
+        r.key() for r in env.manager.plan(req(plain)).requests
+    ]
+
+
+async def test_tags_are_sent_billed_and_kept_out_of_the_transcript(tmp_path: Path) -> None:
+    provider = FakeProvider()
+    env = Env(tmp_path, provider, daily_char_budget=10_000)
+    plan = env.manager.plan(req_for(TAGGER, TAGGED))
+    assert not plan.tags_ignored
+    # Tags are billed like text (seen on the live API); only the joining spaces are not sent.
+    assert plan.billable_chars == sum(len(c.text) for c in plan.chunks) == len(TAGGED) - 1
+    job = await env.finish(await env.manager.submit(req_for(TAGGER, TAGGED)))
+    assert "".join(c["text"] for c in provider.calls).count("[") == 2
+    assert job.billed_chars == plan.billable_chars
+    assert job.words is not None
+    assert [w.text for w in job.words] == [
+        "It",
+        "was",
+        "a",
+        "quiet",
+        "morning.",
+        "Nobody",
+        "else",
+        "was",
+        "awake.",
+    ]
+
+
+# ------------------------------------------------------------ estimates and budget
+async def test_the_estimate_reserves_exactly_what_the_plan_bills(tmp_path: Path) -> None:
+    v4 = ELEVENLABS_MODELS["eleven_v4"]
+    env = Env(tmp_path, FakeProvider(delay=5.0), daily_char_budget=10_000)
+    plan = env.manager.plan(req_for(v4))
+    assert plan.billable_chars == plan.char_count == sum(len(c) for c in split_text(STORY, 50))
+    job = await env.manager.submit(req_for(v4))
+    assert env.budget.remaining == 10_000 - plan.billable_chars
+    await env.manager.delete(job.id)
+
+
+async def test_a_failed_v4_job_refunds_its_unused_reservation(tmp_path: Path) -> None:
+    v4 = ELEVENLABS_MODELS["eleven_v4"]
+
+    def fail_late(text: str) -> Exception | None:
+        return ProviderRejectedError("no") if text.startswith("H") else None
+
+    provider = FakeProvider(fail_when=fail_late, delay=lambda t: 0.2 if t.startswith("H") else 0)
+    env = Env(tmp_path, provider, tts_concurrency=8, daily_char_budget=10_000)
+    job = await env.finish(await env.manager.submit(req_for(v4)))
+    assert job.status is JobStatus.FAILED
+    assert 0 < job.billed_chars < job.char_count  # some chunks were paid for, not all
+    assert env.budget.remaining == 10_000 - job.billed_chars
+
+
+async def test_word_timings_never_run_past_the_audio(tmp_path: Path) -> None:
+    """The live API's v4 alignment ends ~80 ms after the audio; timings are clamped."""
+
+    class Overshooting(FakeProvider):
+        async def synthesize(self, text: str, voice_id: str, **kwargs: Any) -> AudioClip:
+            clip = await super().synthesize(text, voice_id, **kwargs)
+            assert clip.alignment is not None
+            late = tuple(e + 0.08 for e in clip.alignment.ends)
+            return replace(clip, alignment=replace(clip.alignment, ends=late))
+
+    env = Env(tmp_path, Overshooting())
+    job = await env.finish(await env.manager.submit(req()))
+    assert job.words is not None and job.duration_seconds is not None
+    assert max(w.end for w in job.words) <= round(job.duration_seconds, 3)
+    assert all(w.start <= w.end for w in job.words)

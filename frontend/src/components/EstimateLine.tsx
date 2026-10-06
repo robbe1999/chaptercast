@@ -32,6 +32,12 @@ export function EstimateLine({ estimate, minutes }: Props) {
       {free && cached_chunks > 0 && (
         <p className="muted small">Every section was generated recently, so it is reused at no cost.</p>
       )}
+      {estimate.tags_ignored && (
+        <p className="small">
+          Tags are ignored by this model: they are removed before sending, so they are not read
+          aloud.
+        </p>
+      )}
       <p className={overBudget ? "error small" : "muted small"}>
         {overBudget
           ? `This needs ${billable_characters.toLocaleString()} characters but only ${daily_budget_remaining.toLocaleString()} are left in today's budget.`

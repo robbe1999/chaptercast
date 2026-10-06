@@ -13,7 +13,7 @@ Turn a chapter of text into a narrated audiobook with the [ElevenLabs](https://e
        alt="ChapterCast demo: choosing the Flash model halves the credit estimate, generating the audio, then the read-along highlights each word as it is spoken and jumps when a word is clicked">
 </p>
 
-Paste or import a chapter, pick a voice, see what it will cost, then play it back with a word-by-word read-along and download the audio and captions. The interesting part is everything between "paste" and "play": splitting text at natural boundaries, calling the API concurrently without tripping its limits, surviving transient failures, keeping prosody continuous across chunk boundaries, never paying twice for the same sentence, and doing all of it without putting the API key, or your credits, at risk.
+ChapterCast is my hands-on way to learn the ElevenLabs API: a proof of concept, not a production service. Paste or import a chapter, pick a voice, see what it will cost, then play it back with a word-by-word read-along and download the audio and captions. The interesting part is everything between "paste" and "play": splitting text at natural boundaries, calling the API concurrently without tripping its limits, surviving transient failures, keeping prosody continuous across chunk boundaries, never paying twice for the same sentence, and doing all of it without putting the API key, or your credits, at risk.
 
 ### Features
 
@@ -23,7 +23,8 @@ Paste or import a chapter, pick a voice, see what it will cost, then play it bac
 | **Captions** | Download `.srt` or `.vtt` subtitles, cut at sentence boundaries with standard readability limits. |
 | **Smart re-generation** | Each section is cached by a hash of everything that affects its audio. Fix a typo and only that section (and its two neighbours, whose context changed) is paid for again. |
 | **Cost before you pay** | A live estimate shows sections, how many are already cached, credits for the chosen model and the remaining daily budget. |
-| **Model and voice tuning** | Pick from the live model list (with its credit multiplier, e.g. Flash at 0.5×), limited by an operator allowlist. Adjust stability, similarity, style and speed. |
+| **Eleven v4 and v4 Turbo, with audio tags** | Write expression tags such as `[warm]` or `[whispered]` into the text, or insert them with the helper under the text box. Tags are never split across sections, are billed like text, and never show up as words in the read-along or captions. Models that would read them aloud get them removed, and the UI says so. |
+| **Model and voice tuning** | Five models, each shown with its credits per character (for example `0.5x credits`) and badges such as Audio tags or Low latency. What each model can do lives in one registry; controls a model cannot use (style, speaker boost) are disabled with an explanation. Adjust stability, similarity, style, speed and speaker boost. |
 | **Voice previews** | Hear a voice before spending a single credit, with its accent, age and use-case labels. |
 | **Import** | Drop in a `.txt` or `.md` file. Markdown is turned into narration text: headings become sentences, links keep their text, code and URLs are dropped. |
 
@@ -71,7 +72,7 @@ flowchart LR
 2. **Plan.** Each chunk gets a SHA-256 cache key over provider, model, voice, settings, output format, its text and its neighbouring context. Chunks already in the cache are free; only the rest are reserved against the daily budget. `POST /api/estimate` runs exactly this plan without spending anything, which is what powers the live cost line in the UI.
 3. **Synthesise.** Cache misses are sent concurrently, bounded by a semaphore shared across all jobs so the provider's concurrency limits are respected. Each request carries the neighbouring text (`previous_text` / `next_text`), which the API uses to keep intonation continuous across stitched segments.
 4. **Recover.** Timeouts, 5xx and 429 are retried with exponential backoff and full jitter, honouring `Retry-After`. Auth, quota and validation errors fail fast. The first failure cancels the sibling chunks so a doomed job stops spending credits.
-5. **Stitch and align.** Clips are joined in order (ffmpeg `-c copy`, no re-encode, when available), written atomically to a private directory, and served with Range support so seeking works. Each clip's per-character timings are shifted by the duration of the audio before it and grouped into words, giving chapter-level timings for the read-along view and the caption files. Against the real API, the last word of a test chapter ended 50 ms before the end of the ffprobe-measured audio.
+5. **Stitch and align.** Clips are joined in order (ffmpeg `-c copy`, no re-encode, when available), written atomically to a private directory, and served with Range support so seeking works. Each clip's per-character timings are shifted by the duration of the audio before it and grouped into words, giving chapter-level timings for the read-along view and the caption files. Expression tags are skipped, and timings are clamped to the audio length because v4 alignments end slightly after the audio does.
 6. **Clean up.** Audio is deleted when the user starts over, or after a TTL. Cached sections expire after a day (configurable) and are evicted least-recently-used beyond a size cap. Orphans from a previous process are purged at startup.
 
 More detail, including the scaling path, is in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -85,7 +86,7 @@ Interactive docs are off by default; enable with `CHAPTERCAST_ENABLE_DOCS=true` 
 | `GET` | `/api/config` | Public client config (provider, limits, whether a token is required) |
 | `GET` | `/api/voices` | Available voices, with labels and a preview link |
 | `GET` | `/api/voices/{id}/preview` | A short, free sample of a voice |
-| `GET` | `/api/models` | Models this server offers, with credit multipliers |
+| `GET` | `/api/models` | Models this server offers: label, description, credits per character, request limit, latency class and capability flags |
 | `POST` | `/api/estimate` | Dry-run a job: sections, cache hits, credits, remaining budget |
 | `POST` | `/api/jobs` | Start a job (`text`, `voice_id`, optional `model_id` and `voice_settings`). Returns `202` with a `Location` header |
 | `GET` | `/api/jobs/{id}` | Status, per-chunk progress, cache reuse and billed characters |
@@ -135,7 +136,7 @@ Everything is an environment variable (or a local `.env`). Defaults are safe for
 | `CHAPTERCAST_JOBS_PER_MINUTE` | `10` | Per-client job creation rate |
 | `CHAPTERCAST_JOB_TTL_SECONDS` | `3600` | How long finished audio is kept |
 | `CHAPTERCAST_ELEVENLABS_MODEL_ID` | `eleven_multilingual_v2` | Default model (always allowed) |
-| `CHAPTERCAST_ALLOWED_MODELS` | `eleven_multilingual_v2,eleven_flash_v2_5,eleven_turbo_v2_5` | Models users may pick. Each must support context stitching and timestamps |
+| `CHAPTERCAST_ALLOWED_MODELS` | `eleven_multilingual_v2,eleven_flash_v2_5,eleven_turbo_v2_5,eleven_v4,eleven_v4_turbo` | Models users may pick. Every id must be in the model registry, or the app refuses to start |
 | `CHAPTERCAST_CACHE_MAX_MB` | `100` | Size cap of the clip cache; `0` disables it |
 | `CHAPTERCAST_CACHE_TTL_SECONDS` | `86400` | How long cached sections are reused |
 | `CHAPTERCAST_ELEVENLABS_OUTPUT_FORMAT` | `mp3_44100_128` | MP3 formats only |
@@ -157,21 +158,25 @@ make openapi    # regenerate docs/openapi.json after an API change
 
 What the tests cover, beyond the happy path:
 
-- Chunker invariants under random Unicode input (Hypothesis), including that every paragraph break survives chunking.
+- Chunker invariants under random Unicode input (Hypothesis), including that every paragraph break survives chunking, and that expression tags are never split, lost or reordered and only end a section when the next one has no room.
+- Model capabilities: a fake model without context stitching gets no context and no context in its cache key (an edit re-generates only that section), a fake model without timestamps falls back to plain audio with no read-along, unsupported voice settings are dropped, unregistered model ids stop the app at startup.
+- Tags in transcripts and captions, tested on alignments recorded from the live API.
 - Transcript merging: offsets across clips, paragraphs across chunk boundaries, words covering all text in order (Hypothesis); caption cue limits, wrapping, SRT/WebVTT formatting and markup escaping.
 - Cache: every input changes the key, TTL without read-extension, LRU eviction, corrupt entries as misses, path-shaped keys rejected; edits re-generate exactly the changed chunk and its neighbours; budget never double-charged when a predicted hit vanishes.
-- ElevenLabs client: the documented `/with-timestamps` request and response, malformed or mismatched alignment degrading to "no transcript", model filtering, and preview fetching that never sends the key or follows a URL off the allowlist.
+- ElevenLabs client: the documented `/with-timestamps` request and response for every model including v4 and v4 Turbo, the plain endpoint fallback, malformed or mismatched alignment degrading to "no transcript", registry-based model filtering with price-drift logging, readable errors for an unknown voice or model, and preview fetching that never sends the key or follows a URL off the allowlist.
 - Retry policy: which statuses retry, `Retry-After` capping, backoff bounds, no retry on auth, quota or 4xx.
 - Job manager: output order when chunks finish out of order, bounded concurrency, failure cancels siblings, budget refunds, TTL expiry, eviction, shutdown.
-- API: auth, lockout, spoofed `X-Forwarded-For`, rate limit, budget, body limits, security headers, error shape, no echo of submitted text, no secret in any response or log line.
-- Frontend: polling, backoff, abort on cancel and unmount, object-URL cleanup, the auth gate, accessible status updates, debounced and abortable estimates, Markdown to narration, file import errors, voice previews, remembered preferences, the read-along highlight and click-to-seek.
+- API: auth, lockout, spoofed `X-Forwarded-For`, rate limit, budget, body limits, security headers, error shape, no echo of submitted text, no secret in any response or log line (including a v4 failure whose upstream error body contains the key).
+- Frontend: polling, backoff, abort on cancel and unmount, object-URL cleanup, the auth gate, accessible status updates, debounced and abortable estimates, Markdown to narration, file import errors, voice previews, remembered preferences, the read-along highlight and click-to-seek, the model picker with costs and badges, disabled controls, the tag helper (mouse and keyboard), and model data with capabilities this client does not know yet.
 
 ## Project layout
 
 ```
 backend/chaptercast/
   config.py          validated settings, secrets as SecretStr
-  chunking.py        sentence-aware splitter, paragraph-aware chunks
+  models.py          model registry: what each model can do and costs
+  tags.py            what counts as an expression tag
+  chunking.py        sentence-aware splitter, paragraph-aware chunks, atomic tags
   providers/         TTSProvider protocol, ElevenLabs client, demo provider
   jobs.py            planning, lifecycle, concurrency, budget accounting, cleanup
   cache.py           content-addressed clip cache (LRU + TTL)
@@ -186,9 +191,20 @@ frontend/src/
   hooks/             useJob (submit/poll/fetch), useEstimate (debounced), usePlaybackTime
   components/        composer pieces, voice picker, narration settings, read-along
   lib/               Markdown to narration, preferences, downloads
-docs/                architecture, security model, OpenAPI snapshot
+docs/                architecture, security model, models (verified), OpenAPI snapshot
 scripts/             secret scanner
 ```
+
+## What I verified against the real API
+
+Everything below ran against the live ElevenLabs API with my own key. The details, and what I could not verify, are in [docs/MODELS.md](docs/MODELS.md).
+
+- **2026-10-01, Flash v2.5:** a 3-section chapter end to end; the alignment matched the text exactly; a re-run was served from the cache with 0 characters billed; voice previews (after fixing the CDN's `text/plain` content type).
+- **2026-10-06, model capabilities:** `GET /v1/models` for all five models. Credits per character come from `model_rates.character_cost_multiplier`, not `token_cost_factor`, which is 1.0 for every model.
+- **2026-10-06, Eleven v4 and v4 Turbo:** `/with-timestamps` returns an alignment that matches the text; `previous_text`/`next_text` are accepted and not billed; expression tags are billed and appear in the alignment as characters before the first word; every voice setting is accepted; an unknown voice returns 404 and an unknown model 400, neither billed.
+- **2026-10-06, end to end through ChapterCast:** a two-sentence clip with each v4 model, with the read-along and both caption formats working.
+
+**Mocked only** (tested with recorded or fake responses, never against the live API): retries, backoff and `Retry-After`; quota, auth and rate-limit errors; the plain-endpoint fallback for models without timestamps and the no-stitching path (no registered model needs them today); long chapters with many sections; concurrency limits; whether v4 actually uses the context fields.
 
 ## Limitations and next steps
 
