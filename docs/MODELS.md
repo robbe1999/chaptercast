@@ -35,13 +35,24 @@ Real requests to `POST /v1/text-to-speech/{voice_id}/with-timestamps` with `outp
 
 Every request also returned a top-level `quality_check` field, which was `null` each time.
 
+End to end through ChapterCast (`POST /api/jobs` with the same 43-character text, fresh cache):
+
+| | `eleven_v4` | `eleven_v4_turbo` |
+|---|---|---|
+| Estimate before generating | 43 characters, 43 credits | 43 characters, 22 credits |
+| Job | succeeded, word timings available | succeeded, word timings available |
+| Audio length (ffprobe) | 3.600 s | 3.520 s |
+| Last word end before clamping | 3.68 s | 3.60 s |
+| Read-along words and SRT/WebVTT captions | all 8 words, in order | all 8 words, in order |
+
 ## Not verified
 
 - Whether v4 and v4 Turbo actually *use* `previous_text` and `next_text`. The API accepts them, but one short request cannot show a difference in intonation.
 - Whether `style` and `use_speaker_boost` have any effect on v4. The API accepts them, `/v1/models` says the models cannot use them, so ChapterCast drops them for these models.
 - SSML `<break>` tags on any model. ChapterCast never sends SSML; the registry records "no SSML breaks" for v4 from the documentation only.
 - What the older models do with an expression tag (whether they read it aloud). ChapterCast removes tags before sending to them, so this never happens.
-- Rounding of credits for half-price models beyond the single observation above (43 characters billed as 21).
+- Rounding of credits for half-price models beyond the single observation above (43 characters billed as 21). ChapterCast's estimate rounds up, so it showed 22 for the same text.
+- The plain-endpoint fallback and the no-context path against the live API. Every registered model supports timestamps and context, so those paths are tested with fake models only.
 - Long texts, many requests, rate limits and concurrency limits for v4 (`concurrency_group` is `standard_eleven_v4`).
 
 ## What I learned
@@ -51,3 +62,5 @@ The first surprise was that `token_cost_factor` is 1.0 for every model, includin
 On my test sentence, v4 took 3.52 s to say what Multilingual v2 said in 2.88 s, a slower and more deliberate delivery for the same voice. Its alignment also runs 80 ms past the end of the decoded audio, where v2's ends exactly on it, so I treat the alignment as accurate to about a tenth of a second rather than to the millisecond. v4 Turbo reported a server latency of around 110 ms against about 1 s for v2, which is the difference the "low latency" label is about.
 
 Expression tags come back in the alignment as real characters with tiny timings before the first spoken word. That makes them easy to remove from the read-along and the captions without disturbing the timings of the words people actually hear.
+
+v4 is not deterministic: the same 43-character request gave 3.52 s of audio in the morning and 3.60 s when I ran it again through ChapterCast. In both runs the alignment ended 80 ms after the audio did, so ChapterCast now clamps word timings to the length of the audio it actually stitched.
