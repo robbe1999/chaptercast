@@ -167,4 +167,41 @@ describe("createApi", () => {
       "/api/jobs/x%3Fy/captions.vtt",
     ]);
   });
+
+  it("accepts models with capabilities and classes it does not know yet", async () => {
+    const model = {
+      model_id: "eleven_v9",
+      label: "Eleven v9",
+      description: "Future model.",
+      cost_multiplier: 0.25,
+      max_chars_per_request: 20_000,
+      latency_class: "instant", // not a class this client knows
+      capabilities: {
+        timestamps: true,
+        context_stitching: true,
+        style: false,
+        speaker_boost: false,
+        audio_tags: true,
+        ssml_breaks: false,
+        telepathy: true, // a capability added after this client was built
+      },
+    };
+    const fetchImpl = vi.fn(async () => reply({ provider: "elevenlabs", default_model_id: "eleven_v9", models: [model] }));
+    const { models } = await createApi({ fetchImpl, tokenStore: memoryStore() }).listModels();
+    expect(models[0]?.label).toBe("Eleven v9");
+    expect(models[0]?.capabilities).not.toHaveProperty("telepathy");
+  });
+
+  it("still rejects a model that is missing a capability it relies on", async () => {
+    const fetchImpl = vi.fn(async () =>
+      reply({
+        provider: "elevenlabs",
+        default_model_id: "x",
+        models: [{ model_id: "x", label: "X", description: "", cost_multiplier: 1, max_chars_per_request: 1, latency_class: "standard", capabilities: {} }],
+      }),
+    );
+    await expect(createApi({ fetchImpl, tokenStore: memoryStore() }).listModels()).rejects.toMatchObject({
+      code: "bad_response",
+    });
+  });
 });

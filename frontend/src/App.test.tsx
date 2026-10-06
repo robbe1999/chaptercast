@@ -1,9 +1,18 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { ApiError } from "./api/client";
-import { CONFIG, SUCCEEDED, VOICES, makeApi, makeEstimate, makeJob, unauthorized } from "./test/fakes";
+import {
+  CONFIG,
+  FIVE_MODELS,
+  SUCCEEDED,
+  VOICES,
+  makeApi,
+  makeEstimate,
+  makeJob,
+  unauthorized,
+} from "./test/fakes";
 
 const FAST = 1;
 
@@ -158,7 +167,7 @@ describe("App", () => {
     render(<App api={api} pollIntervalMs={FAST} estimateDelayMs={0} />);
 
     await user.type(await screen.findByLabelText("Chapter text"), "Hello.");
-    expect(screen.getByRole("option", { name: "Fast · 0.5× credits" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Fast · 0.5x credits" })).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("Model"), "m2");
     expect(screen.queryByLabelText("Stability")).not.toBeInTheDocument();
 
@@ -291,5 +300,136 @@ describe("App", () => {
     expect(screen.queryByLabelText("Transcript")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /captions/i })).not.toBeInTheDocument();
     expect(api.getTranscript).not.toHaveBeenCalled();
+  });
+
+  // ------------------------------------------------------------- model registry
+  it("lists the models with their cost and capability badges", async () => {
+    const user = userEvent.setup();
+    render(<App api={makeApi([], { listModels: vi.fn(async () => FIVE_MODELS) })} pollIntervalMs={FAST} />);
+    const picker = await screen.findByLabelText("Model");
+    expect(Array.from((picker as HTMLSelectElement).options).map((o) => o.textContent)).toEqual([
+      "Eleven Multilingual v2 · 1.0x credits",
+      "Eleven Flash v2.5 · 0.5x credits",
+      "Eleven Turbo v2.5 · 0.5x credits",
+      "Eleven v4 · 1.0x credits",
+      "Eleven v4 Turbo · 0.5x credits",
+    ]);
+    expect(screen.queryByRole("list", { name: "Model capabilities" })).not.toBeInTheDocument();
+
+    await user.selectOptions(picker, "eleven_v4_turbo");
+    const badges = screen.getByRole("list", { name: "Model capabilities" });
+    expect(within(badges).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+      "Audio tags",
+      "Low latency",
+    ]);
+    expect(screen.getByText("v4 with audio tags at low latency.")).toBeInTheDocument();
+  });
+
+  it("disables the controls a model cannot use and says why", async () => {
+    const user = userEvent.setup();
+    render(<App api={makeApi([])} pollIntervalMs={FAST} />);
+    await user.click(await screen.findByLabelText("Fine-tune the voice"));
+    expect(screen.getByLabelText("Speaker boost")).toBeEnabled();
+
+    await user.selectOptions(screen.getByLabelText("Model"), "m2");
+    expect(screen.getByLabelText("Style exaggeration")).toBeDisabled();
+    expect(screen.getByLabelText("Speaker boost")).toBeDisabled();
+    expect(screen.getByLabelText("Speaker boost").closest("label")).toHaveAttribute(
+      "title",
+      "Fast does not support speaker boost.",
+    );
+    expect(screen.getByLabelText("Style exaggeration").closest(".slider")).toHaveAttribute(
+      "title",
+      "Fast does not support style exaggeration.",
+    );
+  });
+
+  it("sends speaker boost only to turn it off, and only where supported", async () => {
+    const user = userEvent.setup();
+    const api = makeApi([SUCCEEDED()]);
+    render(<App api={api} pollIntervalMs={FAST} />);
+    await user.type(await screen.findByLabelText("Chapter text"), "Hello.");
+    await user.click(screen.getByLabelText("Fine-tune the voice"));
+    await user.click(screen.getByLabelText("Speaker boost"));
+    await user.click(screen.getByRole("button", { name: "Generate audio" }));
+    expect(api.createJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        voiceSettings: { stability: 0.5, similarity_boost: 0.75, speed: 1, style: 0, use_speaker_boost: false },
+      }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  // ---------------------------------------------------------------- audio tags
+  it("offers expression tags only for models that understand them", async () => {
+    const user = userEvent.setup();
+    render(<App api={makeApi([])} pollIntervalMs={FAST} />);
+    await screen.findByLabelText("Chapter text");
+    expect(screen.queryByRole("group", { name: /expression tags/ })).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("Model"), "m4");
+    const helper = screen.getByRole("group", { name: /understands expression tags/ });
+    expect(within(helper).getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Insert [warm] tag",
+      "Insert [whispered] tag",
+    ]);
+  });
+
+  it("inserts a tag at the cursor and puts the cursor after it", async () => {
+    const user = userEvent.setup();
+    render(<App api={makeApi([])} pollIntervalMs={FAST} />);
+    await user.selectOptions(await screen.findByLabelText("Model"), "m4");
+    const textarea = screen.getByLabelText<HTMLTextAreaElement>("Chapter text");
+    fireEvent.change(textarea, { target: { value: "Hello world." } });
+    textarea.setSelectionRange(6, 6); // before "world"
+
+    await user.click(screen.getByRole("button", { name: "Insert [warm] tag" }));
+    expect(textarea).toHaveValue("Hello [warm] world.");
+    await waitFor(() => expect(textarea).toHaveFocus());
+    expect(textarea.selectionStart).toBe("Hello [warm] ".length);
+  });
+
+  it("can insert a tag with the keyboard alone", async () => {
+    const user = userEvent.setup();
+    render(<App api={makeApi([])} pollIntervalMs={FAST} />);
+    await user.selectOptions(await screen.findByLabelText("Model"), "m4");
+    const textarea = screen.getByLabelText<HTMLTextAreaElement>("Chapter text");
+    await user.click(textarea);
+    await user.keyboard("Quiet.");
+    textarea.setSelectionRange(0, 0);
+    screen.getByRole("button", { name: "Insert [whispered] tag" }).focus();
+    await user.keyboard("{Enter}");
+    expect(textarea).toHaveValue("[whispered] Quiet.");
+  });
+
+  it("explains when a model will ignore tags", async () => {
+    const user = userEvent.setup();
+    const api = makeApi([], { estimate: vi.fn(async () => makeEstimate({ tags_ignored: true })) });
+    render(<App api={api} pollIntervalMs={FAST} estimateDelayMs={0} />);
+    await user.type(await screen.findByLabelText("Chapter text"), "[[warm] Hello.");
+    expect(await screen.findByText(/Tags are ignored by this model/)).toBeInTheDocument();
+  });
+
+  // ------------------------------------------------------------ result and errors
+  it("says plainly when the audio has no word timings", async () => {
+    const user = userEvent.setup();
+    const api = makeApi([{ ...SUCCEEDED(), word_timings: false, transcript_url: null, captions: null }]);
+    render(<App api={api} pollIntervalMs={FAST} />);
+    await user.type(await screen.findByLabelText("Chapter text"), "Hello.");
+    await user.click(screen.getByRole("button", { name: "Generate audio" }));
+    expect(await screen.findByText(/did not return word timings/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Transcript")).not.toBeInTheDocument();
+  });
+
+  it("shows the server's message when a model is rejected", async () => {
+    const user = userEvent.setup();
+    const api = makeApi([], {
+      createJob: vi.fn(async () => {
+        throw new ApiError(422, "unknown_model", "That model is not available on this server.");
+      }),
+    });
+    render(<App api={api} pollIntervalMs={FAST} />);
+    await user.type(await screen.findByLabelText("Chapter text"), "Hello.");
+    await user.click(screen.getByRole("button", { name: "Generate audio" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("That model is not available on this server.");
   });
 });
