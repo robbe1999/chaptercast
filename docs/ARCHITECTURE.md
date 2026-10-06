@@ -13,6 +13,8 @@
 | `chunking` | Normalise text, split at natural boundaries | Pure function, so it can be property-tested exhaustively |
 | `providers` | `TTSProvider` protocol, ElevenLabs client, demo provider | Provider specifics live in one file; the pipeline is testable offline; demo mode needs no key |
 | `jobs` | Planning, lifecycle, concurrency, budget accounting, expiry | The only stateful component; all policy lives here |
+| `models` | Model registry: what each model can do and what a character costs | Capabilities are data, so the pipeline never checks model ids |
+| `tags` | What counts as an expression tag (`[warm]`) | One definition shared by the chunker, the planner and the transcript |
 | `cache` | Content-addressed store of synthesised chunks | Pure key derivation plus a small LRU/TTL store; no policy about *when* to pay |
 | `transcript` | Merge per-clip character timings into words; cut captions | Pure functions over plain data, property-tested |
 | `audio` | Duration estimates, lossless stitching | Isolates the ffmpeg subprocess and its fallback |
@@ -86,6 +88,23 @@ sequenceDiagram
 
 Credits are the real blast radius of a leaked or abused endpoint, so cost is bounded at several independent layers: per-job character cap, global daily budget (reserved at submit for cache misses only, and anything not actually billed is refunded), per-client rate limit, active-job cap, stored-job cap and an operator allowlist of models. Any one of them failing open is still limited by the others.
 
+## Model registry and degradation rules
+
+`chaptercast/models.py` describes every offered model as a frozen record: label, description, credits per character, request size limit, latency class, and whether it supports timestamps, context stitching (`previous_text`/`next_text`), style, speaker boost, audio tags and SSML breaks. The ElevenLabs values were checked against the live API ([MODELS.md](MODELS.md)). The provider's live model list only decides *availability*; prices and capabilities come from the registry, and a live price that differs from it is logged. The allowlist (`CHAPTERCAST_ALLOWED_MODELS`) is validated against the registry at startup.
+
+The job carries the model record, and each rule is applied once, where it belongs:
+
+| If the model lacks | Then |
+|---|---|
+| Context stitching | No `previous_text`/`next_text` is sent, and none is part of the cache key, so editing one section never invalidates its neighbours |
+| Timestamps | Plain synthesis instead of `/with-timestamps`; the job reports no word timings, the UI hides the read-along, and transcript or caption requests return 409 with a clear message |
+| Style or speaker boost | The setting is dropped before it reaches the provider or the cache key, and the UI disables the control with a title explaining why |
+| Audio tags | Tags are removed before chunking, sending and hashing, the estimate reports `tags_ignored`, and the UI tells the user |
+
+A request that is invalid for the chosen model fails with a clear error; the pipeline never falls back to a different model. Sections are capped at both ChapterCast's chunk size and the model's own request limit.
+
+Expression tags get two extra rules. The chunker treats a tag and the word it modifies as one unit, so a tag is never split and never left at the end of a section when the next section has room for it. In the transcript, tag characters (which the API times like any other character, just before the first word) are treated as whitespace, so they never appear as words in the read-along or the captions.
+
 ## Smart re-generation
 
 Writers re-generate the same chapter many times: fix a typo, change a name, listen again. Paying for the whole chapter each time is the most expensive thing the app could do, so every chunk is cached under
@@ -95,7 +114,7 @@ sha256(provider, output format, model, voice, voice settings, text, previous_tex
 ```
 
 - **Everything that changes the audio is in the key**, so a hit is guaranteed to be the same request. Changing model, voice or a single slider is a miss.
-- **Context is in the key too.** Editing one sentence therefore re-generates that chunk *and its two neighbours*, whose `previous_text`/`next_text` changed. Leaving context out would save a little more but could stitch audio generated against text that no longer exists. Consistency won.
+- **Context is in the key too** (for models that use context). Editing one sentence therefore re-generates that chunk *and its two neighbours*, whose `previous_text`/`next_text` changed. Leaving context out would save a little more but could stitch audio generated against text that no longer exists. Consistency won.
 - **Planning is a pure lookup.** `JobManager.plan` chunks the text and checks which keys exist. It never spends, so the same function backs both `POST /api/estimate` and the budget reservation in `submit`.
 - **Storage** is two files per entry (audio, then metadata containing format, size and timings), written atomically, metadata last, so a half-written entry is a miss. Expiry is judged by creation time and is *not* extended by reads; least-recently-used entries are evicted beyond the size cap.
 
